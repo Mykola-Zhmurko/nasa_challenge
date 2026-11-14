@@ -1,0 +1,24 @@
+# secrets
+.env
+*.env.local
+
+# local tooling / environments
+.venv/
+node_modules/
+target/
+dist/
+__pycache__/
+*.pyc
+.taste-skill/
+.crush/
+.ai-memory.toml
+
+# logs
+*.log
+
+# intermediate artifact of the optional Rust importer (same rows as the Python run)
+data/fires_rs.csv
+
+# compiled copies of the vite config
+web/vite.config.js
+web/vite.config.d.ts

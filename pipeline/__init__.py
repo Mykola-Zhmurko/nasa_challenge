@@ -1,0 +1,31 @@
+"""NASA FIRMS MODIS and VIIRS hotspot harmonization pipeline."""
+
+from pipeline.config import (
+    BASE_DIR,
+    CSV_CHUNK_SIZE,
+    DATA_DIR,
+    DUCKDB_PATH,
+    H3_RESOLUTION,
+    MODIS_FLAG_CONFIDENCE,
+    MODIS_MIN_CONFIDENCE,
+    PARQUET_PATH,
+    RAW_DIR,
+    SOURCE_MASK_MODIS,
+    SOURCE_MASK_VIIRS,
+    VIIRS_CONFIDENCE_MAP,
+)
+
+__all__ = [
+    "BASE_DIR",
+    "CSV_CHUNK_SIZE",
+    "DATA_DIR",
+    "DUCKDB_PATH",
+    "H3_RESOLUTION",
+    "MODIS_FLAG_CONFIDENCE",
+    "MODIS_MIN_CONFIDENCE",
+    "PARQUET_PATH",
+    "RAW_DIR",
+    "SOURCE_MASK_MODIS",
+    "SOURCE_MASK_VIIRS",
+    "VIIRS_CONFIDENCE_MAP",
+]
