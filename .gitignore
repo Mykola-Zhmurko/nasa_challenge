@@ -20,4 +20,6 @@ target/
 dist/
 __pycache__/
 data/*.parquet
+data/history/
+data/fires_rs.csv
 *.log
