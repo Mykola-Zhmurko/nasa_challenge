@@ -1,24 +1,23 @@
-# secrets
+# nur Entwicklungs-Dokumente, nicht fürs Repo
+SPEC.md
+UI-BRIEF.md
+api/README.md
+pipeline/README.md
+importer-rs/README.md
+web/README.md
+.ai-memory.toml
+.crush/
+.taste-skill/
+
+# Zugangsdaten
 .env
 *.env.local
 
-# local tooling / environments
+# generiert / lokal
 .venv/
 node_modules/
 target/
 dist/
 __pycache__/
-*.pyc
-.taste-skill/
-.crush/
-.ai-memory.toml
-
-# logs
+data/*.parquet
 *.log
-
-# intermediate artifact of the optional Rust importer (same rows as the Python run)
-data/fires_rs.csv
-
-# compiled copies of the vite config
-web/vite.config.js
-web/vite.config.d.ts

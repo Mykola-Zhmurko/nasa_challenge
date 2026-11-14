@@ -15,7 +15,7 @@ import {fetchCalendar} from '../../lib/api'
 import {FIRE_RAMP, formatCount, frpCuts, frpRampColor, frpStepLabels} from '../../lib/ramp'
 import {MAX_ZOOM, MIN_ZOOM, SAT_NATIVE_ZOOM} from '../../lib/zoom'
 
-export type Basemap = 'dark' | 'satellite'
+export type Basemap = 'dark' | 'canvas'
 
 interface MapViewProps {
   cells: Cell[]
@@ -265,7 +265,7 @@ export function MapView({
   const sensorsToShow = cellSensors ?? areaSensors
 
   return (
-    <div className="map">
+    <div className="map" data-basemap={basemap}>
       <MapContainer
         center={[18, 8]}
         zoom={2}
@@ -282,18 +282,18 @@ export function MapView({
         {basemap === 'dark' ? (
           <TileLayer
             key="dark"
-            url="https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-            maxZoom={MAX_ZOOM}
-            maxNativeZoom={16}
-            attribution='Basemap: <a href="https://www.esri.com/">Esri</a> · World Dark Gray Canvas'
-          />
-        ) : (
-          <TileLayer
-            key="satellite"
             url="https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg"
             maxZoom={MAX_ZOOM}
             maxNativeZoom={SAT_NATIVE_ZOOM}
-            attribution='Imagery: <a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a> · Blue Marble'
+            attribution='<a href="https://earthdata.nasa.gov/gibs">NASA GIBS</a>'
+          />
+        ) : (
+          <TileLayer
+            key="canvas"
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+            maxZoom={MAX_ZOOM}
+            maxNativeZoom={16}
+            attribution="Esri, HERE, Garmin, OpenStreetMap contributors"
           />
         )}
         <Hotspots cells={cells} cuts={cuts} onSelect={setSelectedCell} />
@@ -349,10 +349,10 @@ export function MapView({
         </button>
         <button
           type="button"
-          aria-pressed={basemap === 'satellite'}
-          onClick={() => onBasemap('satellite')}
+          aria-pressed={basemap === 'canvas'}
+          onClick={() => onBasemap('canvas')}
         >
-          Satellite
+          Canvas
         </button>
       </div>
 

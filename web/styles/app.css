@@ -243,6 +243,14 @@ a {
   text-shadow: none !important;
 }
 
+.leaflet-tile-pane {
+  filter: brightness(0.42) saturate(0.55) contrast(1.05);
+}
+
+.map[data-basemap="canvas"] .leaflet-tile-pane {
+  filter: none;
+}
+
 .leaflet-bottom.leaflet-left {
   left: 8px;
   bottom: 8px;
@@ -393,8 +401,8 @@ a {
 
 .map-legend {
   position: absolute;
-  left: 18px;
-  bottom: 52px;
+  left: 10px;
+  bottom: 72px;
   z-index: 500;
   width: 284px;
   padding: 8px 10px;
