@@ -109,8 +109,6 @@ function weightedFrp(months: CalendarResponse['months'] | undefined): number {
 }
 
 export default function App() {
-  ;(window as unknown as {__renders?: number}).__renders =
-    ((window as unknown as {__renders?: number}).__renders ?? 0) + 1
   const initial = useMemo(() => readInitialUrlState(), [])
 
   const [health, setHealth] = useState<Health | null>(null)

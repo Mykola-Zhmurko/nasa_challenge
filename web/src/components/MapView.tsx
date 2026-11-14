@@ -393,8 +393,6 @@ function ZoomSync({
     let lastEvent = 0
     let lastReport = 0
     const fire = () => {
-      ;(window as unknown as {__reports?: number}).__reports =
-        ((window as unknown as {__reports?: number}).__reports ?? 0) + 1
       if (Date.now() - lastEvent < SETTLE_MS) {
         schedule()
         return
@@ -409,7 +407,6 @@ function ZoomSync({
       timer = setTimeout(fire, wait)
     }
     report()
-    ;(window as unknown as {__map?: L.Map}).__map = map
     map.on('zoomend', schedule)
     map.on('moveend', schedule)
     return () => {
