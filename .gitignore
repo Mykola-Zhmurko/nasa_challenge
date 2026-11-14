@@ -1,4 +1,4 @@
-# nur Entwicklungs-Dokumente, nicht fürs Repo
+# development docs only, not for the repo
 SPEC.md
 UI-BRIEF.md
 api/README.md
@@ -9,11 +9,11 @@ web/README.md
 .crush/
 .taste-skill/
 
-# Zugangsdaten
+# credentials
 .env
 *.env.local
 
-# generiert / lokal
+# generated / local
 .venv/
 node_modules/
 target/
