@@ -143,6 +143,56 @@ a {
   border-color: #505462;
 }
 
+.search-wrap {
+  position: relative;
+}
+
+.search-suggest {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 300px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface-alpha);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.5);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 1200;
+}
+
+.suggest-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 9px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.suggest-row.is-active {
+  background: var(--raised);
+}
+
+.suggest-name {
+  font-size: var(--fs-small);
+}
+
+.suggest-detail {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .readout {
   margin-left: auto;
   display: flex;
@@ -289,6 +339,12 @@ a {
 
 .map[data-basemap="satellite"] .leaflet-tile-pane {
   filter: brightness(0.7) saturate(0.9) contrast(1.05);
+}
+
+/* The OpenStreetMap under-layer only shows where the imagery has no pixels (open water).
+   Darkened so it reads as water, not as a bright map. */
+.leaflet-layer.under-osm {
+  filter: grayscale(0.9) brightness(0.62) contrast(1.12);
 }
 
 .leaflet-bottom.leaflet-left {
@@ -618,13 +674,6 @@ a {
 .sensor-meta {
   color: var(--muted);
   font-size: var(--fs-small);
-}
-
-.sensor-count {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-  font-weight: 500;
 }
 
 /* Overlays presets */
@@ -1116,6 +1165,103 @@ a {
   line-height: 1.45;
 }
 
+/* ---------- trend charts inside the calendar ---------- */
+
+.cal-trends {
+  margin-top: 18px;
+}
+
+.trend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.trend-card {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--rule);
+  border-radius: var(--radius-card);
+  min-width: 0;
+}
+
+.trend-card figcaption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.trend-card h3 {
+  margin: 0;
+  font-size: var(--fs-section);
+  font-weight: 600;
+}
+
+.trend-card .range {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-plot svg {
+  display: block;
+  overflow: visible;
+}
+
+.trend-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.trend-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.trend-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.trend-pick select {
+  height: 24px;
+  padding: 0 4px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-pick select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.trend-readout {
+  margin: 4px 0 0;
+  min-height: 18px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-readout[data-live='true'] {
+  color: var(--text);
+}
+
 /* ---------- timeline strip ---------- */
 
 .timeline-strip {
@@ -1278,6 +1424,10 @@ a {
   .help-grid {
     grid-template-columns: 1fr;
     gap: 14px;
+  }
+
+  .trend-grid {
+    grid-template-columns: 1fr;
   }
 
   .timeline-strip {

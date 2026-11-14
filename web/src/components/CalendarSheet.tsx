@@ -13,6 +13,7 @@ import {
   rampColor,
   rampInk,
 } from '../../lib/ramp'
+import {TrendCharts} from './TrendCharts'
 
 interface CalendarSheetProps {
   months: CalendarMonth[]
@@ -23,6 +24,7 @@ interface CalendarSheetProps {
   onSelect: (day: string | null) => void
   from: string
   to: string
+  rangeTo: string
   onClose: () => void
 }
 
@@ -38,10 +40,12 @@ export function CalendarSheet({
   onSelect,
   from,
   to,
+  rangeTo,
   onClose,
 }: CalendarSheetProps) {
-  const defaultYear = Number(to.slice(0, 4))
-  const defaultMonth = Number(to.slice(5, 7))
+  const defaultIso = selected ?? rangeTo
+  const defaultYear = Number(defaultIso.slice(0, 4))
+  const defaultMonth = Number(defaultIso.slice(5, 7))
   const [focusedYm, setFocusedYm] = useState<{year: number; month: number} | null>(null)
 
   const year = selected
@@ -65,6 +69,7 @@ export function CalendarSheet({
   const minYear = years.length ? Math.min(...years) : defaultYear
   const maxYear = years.length ? Math.max(...years) : defaultYear
   const yearSpanLabel = minYear < maxYear ? `${minYear}-${maxYear}` : `2001-${maxYear}`
+  const yearsExpected = Math.max(1, maxYear - 2001 + 1)
 
   const byDate = useMemo(() => new Map(days.map(day => [day.date, day.detections])), [days])
   const byMonth = useMemo(
@@ -280,6 +285,16 @@ export function CalendarSheet({
           </p>
         </div>
       </div>
+
+      <TrendCharts
+        months={months}
+        days={days}
+        climatology={climatology}
+        year={year}
+        selected={selected}
+        yearsLoaded={years.length}
+        yearsExpected={yearsExpected}
+      />
     </section>
   )
 }
