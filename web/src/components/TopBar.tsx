@@ -15,10 +15,10 @@ interface TopBarProps {
 const NasaMark = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <circle cx="12" cy="12" r="10.5" fill="#1d222b" stroke="#3a3a3e" strokeWidth="1" />
-    <rect x="5" y="13" width="3" height="6" fill="#f6df7f" />
-    <rect x="9" y="10" width="3" height="9" fill="#f0a33e" />
-    <rect x="13" y="7" width="3" height="12" fill="#df6324" />
-    <rect x="17" y="4" width="3" height="15" fill="#b8321a" />
+    <rect x="5" y="13" width="3" height="6" fill="#3b528b" />
+    <rect x="9" y="10" width="3" height="9" fill="#269994" />
+    <rect x="13" y="7" width="3" height="12" fill="#5ec962" />
+    <rect x="17" y="4" width="3" height="15" fill="#fde725" />
   </svg>
 )
 

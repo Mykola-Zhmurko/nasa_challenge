@@ -1,11 +1,14 @@
-import type {CalendarDay, CalendarMonth} from '../../lib/api'
+import {useMemo, useState} from 'react'
+import type {CalendarAnomaly, CalendarClimatology, CalendarDay, CalendarMonth} from '../../lib/api'
 import {
   FIRE_RAMP,
   dayNumber,
   daysInMonth,
   firstWeekday,
+  formatCompact,
   formatCount,
   formatRange,
+  monthFull,
   monthShort,
   rampColor,
   rampInk,
@@ -14,6 +17,8 @@ import {
 interface CalendarSheetProps {
   months: CalendarMonth[]
   days: CalendarDay[]
+  climatology: CalendarClimatology[]
+  anomaly: CalendarAnomaly[]
   selected: string | null
   onSelect: (day: string | null) => void
   from: string
@@ -22,31 +27,80 @@ interface CalendarSheetProps {
 }
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTH_NUMS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 export function CalendarSheet({
   months,
   days,
+  climatology,
+  anomaly,
   selected,
   onSelect,
   from,
   to,
   onClose,
 }: CalendarSheetProps) {
-  const year = Number(to.slice(0, 4))
-  const month = Number(to.slice(5, 7))
-  const total = days.reduce((sum, day) => sum + day.detections, 0)
-  const peak = days.reduce<CalendarDay | null>(
-    (best, day) => (!best || day.detections > best.detections ? day : best),
-    null,
+  const defaultYear = Number(to.slice(0, 4))
+  const defaultMonth = Number(to.slice(5, 7))
+  const [focusedYm, setFocusedYm] = useState<{year: number; month: number} | null>(null)
+
+  const year = selected
+    ? Number(selected.slice(0, 4))
+    : (focusedYm?.year ?? defaultYear)
+  const month = selected
+    ? Number(selected.slice(5, 7))
+    : (focusedYm?.month ?? defaultMonth)
+
+  const years = useMemo(() => {
+    const set = new Set<number>()
+    for (const m of months) {
+      if (Number.isFinite(m.year)) set.add(m.year)
+    }
+    if (!set.size && Number.isFinite(defaultYear)) {
+      set.add(defaultYear)
+    }
+    return Array.from(set).sort((a, b) => b - a)
+  }, [months, defaultYear])
+
+  const minYear = years.length ? Math.min(...years) : defaultYear
+  const maxYear = years.length ? Math.max(...years) : defaultYear
+  const yearSpanLabel = minYear < maxYear ? `${minYear}-${maxYear}` : `2001-${maxYear}`
+
+  const byDate = useMemo(() => new Map(days.map(day => [day.date, day.detections])), [days])
+  const byMonth = useMemo(
+    () => new Map(months.map(item => [`${item.year}-${item.month}`, item.detections])),
+    [months],
   )
-  const byDate = new Map(days.map(day => [day.date, day.detections]))
-  const byMonth = new Map(months.map(item => [`${item.year}-${item.month}`, item.detections]))
+  const climByMonth = useMemo(
+    () => new Map(climatology.map(item => [item.month, item.median_detections])),
+    [climatology],
+  )
+  const anomalyByYm = useMemo(
+    () => new Map(anomaly.map(item => [`${item.year}-${item.month}`, item.ratio])),
+    [anomaly],
+  )
+
+  const monthDays = useMemo(() => {
+    const prefix = `${year}-${String(month).padStart(2, '0')}-`
+    return days.filter(d => d.date.startsWith(prefix))
+  }, [days, year, month])
+
   const monthTotal = byMonth.get(`${year}-${month}`) ?? 0
-  const dayPeak = days.reduce((max, item) => Math.max(max, item.detections), 0)
+  const dayPeak = monthDays.reduce((max, item) => Math.max(max, item.detections), 0)
   const monthPeak = months.reduce((max, item) => Math.max(max, item.detections), 0)
   const todayIso = new Date().toISOString().slice(0, 10)
   const lead = firstWeekday(year, month)
   const length = daysInMonth(year, month)
+
+  const medianForMonth = climByMonth.get(month) ?? monthTotal
+  const ratioForMonth =
+    anomalyByYm.get(`${year}-${month}`) ??
+    (medianForMonth > 0 ? Math.round((monthTotal / medianForMonth) * 100) / 100 : 0)
+
+  const peakDay = monthDays.reduce<CalendarDay | null>(
+    (best, day) => (!best || day.detections > best.detections ? day : best),
+    null,
+  )
 
   const cells: (number | null)[] = [
     ...Array.from({length: lead}, () => null),
@@ -57,9 +111,9 @@ export function CalendarSheet({
     <section className="calendar-sheet" aria-label="Burning activity calendar">
       <div className="sheet-bar">
         <div className="cal-head" style={{marginBottom: 0}}>
-          <h2>Burning calendar</h2>
+          <h2>Burning calendar ({yearSpanLabel})</h2>
           <span className="range">
-            {monthShort(month)} {year} · {formatRange(from, to)}
+            {years.length} {years.length === 1 ? 'year' : 'years'} · {formatRange(from, to)}
           </span>
         </div>
         <button
@@ -76,6 +130,99 @@ export function CalendarSheet({
 
       <div className="calendar-grid-wrap">
         <div>
+          <div className="cal-head">
+            <h2>Annual × monthly heatmap</h2>
+            <span className="range">
+              Rows = years, columns = months · click a cell to inspect
+            </span>
+          </div>
+
+          <div className="multiyear-wrap" role="region" aria-label="Multi-year monthly burning heatmap">
+            <div className="my-header">
+              <span className="my-year-col">Year</span>
+              {MONTH_NUMS.map(m => (
+                <span key={m} className="my-month-col">
+                  {monthShort(m)}
+                </span>
+              ))}
+            </div>
+            <div className="my-body">
+              {years.map(y => (
+                <div className="my-row" key={y}>
+                  <span className="my-year-label num">{y}</span>
+                  {MONTH_NUMS.map(m => {
+                    const key = `${y}-${m}`
+                    const count = byMonth.get(key)
+                    const ratio = anomalyByYm.get(key)
+                    const med = climByMonth.get(m)
+                    const isFocused = y === year && m === month
+                    return (
+                      <button
+                        type="button"
+                        key={key}
+                        className="mcell"
+                        data-on={count ? 'true' : 'false'}
+                        aria-current={isFocused ? 'true' : undefined}
+                        onClick={() => setFocusedYm({year: y, month: m})}
+                        style={
+                          count
+                            ? {
+                                background: rampColor(count, monthPeak),
+                                color: rampInk(count, monthPeak),
+                              }
+                            : undefined
+                        }
+                        title={
+                          count
+                            ? `${monthFull(m)} ${y}: ${formatCount(count)} hotspots (${(ratio ?? 1).toFixed(1)}x median ${formatCount(Math.round(med ?? count))})`
+                            : `${monthFull(m)} ${y}: no detections`
+                        }
+                      >
+                        <span className="v">{count ? formatCompact(count) : '—'}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="scale" aria-label="Viridis colour ramp legend">
+            <span className="scale-label">Fewer</span>
+            {FIRE_RAMP.map(color => (
+              <span className="swatch" key={color} style={{background: color}} />
+            ))}
+            <span className="scale-label">
+              More · Viridis ramp encodes monthly hotspots (up to {formatCount(monthPeak)})
+            </span>
+          </div>
+
+          <p className="finding">
+            {monthTotal > 0 ? (
+              <>
+                <b>
+                  {monthFull(month)} {year}: {ratioForMonth.toFixed(1)}x the {yearSpanLabel} median for
+                  this month
+                </b>{' '}
+                ({formatCount(monthTotal)} hotspots vs multi-year median{' '}
+                {formatCount(Math.round(medianForMonth))}).
+              </>
+            ) : (
+              'No hotspots recorded in this area for the selected month.'
+            )}
+          </p>
+        </div>
+
+        <div>
+          <div className="cal-head">
+            <h2>
+              {monthFull(month)} {year} daily breakdown
+            </h2>
+            <span className="range">
+              {formatCount(monthTotal)} hotspots · {monthDays.length} of {length} days active
+            </span>
+          </div>
+
           <div className="month-grid">
             {DOW.map(day => (
               <span className="dow" key={day}>
@@ -100,9 +247,15 @@ export function CalendarSheet({
                   aria-current={active ? 'true' : undefined}
                   disabled={count === undefined}
                   onClick={() => onSelect(active ? null : iso)}
-                  title={count === undefined ? 'No data loaded for this day' : `${formatCount(count)} hotspots`}
+                  title={
+                    count === undefined
+                      ? 'No data loaded for this day'
+                      : `${iso}: ${formatCount(count)} hotspots`
+                  }
                   style={
-                    count ? {background: rampColor(count, dayPeak), color: rampInk(count, dayPeak)} : undefined
+                    count
+                      ? {background: rampColor(count, dayPeak), color: rampInk(count, dayPeak)}
+                      : undefined
                   }
                 >
                   {day}
@@ -111,62 +264,19 @@ export function CalendarSheet({
             })}
           </div>
 
-          <div className="scale" aria-hidden="true">
-            <span className="scale-label">Fewer</span>
-            {FIRE_RAMP.map(color => (
-              <span className="swatch" key={color} style={{background: color}} />
-            ))}
-            <span className="scale-label">More · hotspots per day, up to {formatCount(dayPeak)}</span>
-          </div>
-        </div>
-
-        <div>
-          <div className="cal-head">
-            <h2>Monthly totals</h2>
-            <span className="range">
-              {formatCount(monthTotal)} hotspots · {days.length} of {length} days loaded
-            </span>
-          </div>
-
-          <div className="year-strip">
-            {Array.from({length: 12}, (_, index) => index + 1).map(item => {
-              const count = byMonth.get(`${year}-${item}`)
-              return (
-                <div
-                  className="mcell"
-                  key={item}
-                  data-on={count ? 'true' : 'false'}
-                  aria-current={item === month ? 'true' : undefined}
-                  style={
-                    count
-                      ? {background: rampColor(count, monthPeak), color: rampInk(count, monthPeak)}
-                      : undefined
-                  }
-                  title={count ? `${formatCount(count)} hotspots` : 'No data loaded'}
-                >
-                  <span>{monthShort(item)}</span>
-                  <span className="v">{count ? formatCount(count) : '—'}</span>
-                </div>
-              )
-            })}
-          </div>
-
-          <p className="finding">
-            {peak ? (
+          <p className="note" style={{marginTop: 8}}>
+            {peakDay ? (
               <>
+                Peak day in {monthShort(month)} {year}:{' '}
                 <b>
-                  {dayNumber(peak.date)} {monthShort(Number(peak.date.slice(5, 7)))}
+                  {dayNumber(peakDay.date)} {monthShort(month)}
                 </b>{' '}
-                carried the most hotspots in this window: {formatCount(peak.detections)} of{' '}
-                {formatCount(total)} ({Math.round((peak.detections / Math.max(total, 1)) * 100)}%).
+                with {formatCount(peakDay.detections)} hotspots (
+                {Math.round((peakDay.detections / Math.max(monthTotal, 1)) * 100)}% of month).
               </>
             ) : (
-              'No hotspots in this area for the loaded window.'
+              `Select another month cell in the ${yearSpanLabel} matrix to inspect its daily activity.`
             )}
-          </p>
-          <p className="note">
-            Monthly history starts with the loaded 7-day FIRMS window, so earlier months stay empty until
-            imported.
           </p>
         </div>
       </div>

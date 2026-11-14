@@ -42,7 +42,7 @@ function readInitialUrlState(): InitialUrlState {
     rangePreset: '7d',
     day: null,
     pinnedRes: null,
-    basemap: 'dark',
+    basemap: 'satellite',
     colourBy: 'frp',
     sensorsEnabled: {MODIS: true, VIIRS: true},
   }
@@ -86,7 +86,7 @@ function readInitialUrlState(): InitialUrlState {
   }
 
   const rawBasemap = params.get('basemap')
-  if (rawBasemap === 'dark' || rawBasemap === 'blue-marble') {
+  if (rawBasemap === 'satellite' || rawBasemap === 'dark' || rawBasemap === 'blue-marble') {
     defaults.basemap = rawBasemap
   }
 
@@ -168,7 +168,7 @@ export default function App() {
     if (day) return {rangeFrom: day, rangeTo: day}
     if (rangePreset === '24h') return {rangeFrom: to, rangeTo: to}
     if (rangePreset === '3d') return {rangeFrom: shiftIsoDate(to, -2, from), rangeTo: to}
-    return {rangeFrom: from, rangeTo: to}
+    return {rangeFrom: shiftIsoDate(to, -7, from), rangeTo: to}
   }, [day, rangePreset, from, to])
 
   const dayRef = useRef(day)
@@ -369,7 +369,7 @@ export default function App() {
     applyPreset('world')
     setPinnedRes(null)
     setColourBy('frp')
-    setBasemap('dark')
+    setBasemap('satellite')
     setSensorsEnabled({MODIS: true, VIIRS: true})
     setDay(null)
     setRangePreset('7d')
@@ -467,9 +467,9 @@ export default function App() {
                   Cloud cover, heavy smoke, or tree canopy can obscure active fires from satellite sensors.
                 </li>
                 <li>
-                  MODIS (1 km) and VIIRS NOAA-20 (375 m) detections are harmonized into one H3 series; our
-                  record currently covers only the loaded 7-day NASA FIRMS window ({formatDay(from)} to{' '}
-                  {formatDay(to)}).
+                  MODIS (1 km) and VIIRS (375 m) detections are harmonized into one H3 series covering{' '}
+                  {formatDay(from)} to {formatDay(to)}, with anomalies measured against the multi-year
+                  monthly median.
                 </li>
               </ul>
               <div className="disclaimer-foot">
@@ -533,6 +533,8 @@ export default function App() {
           <CalendarSheet
             months={calendar?.months ?? []}
             days={calendar?.days ?? []}
+            climatology={calendar?.climatology ?? []}
+            anomaly={calendar?.anomaly ?? []}
             selected={day}
             onSelect={next => {
               setPlaying(false)
@@ -550,7 +552,7 @@ export default function App() {
 
         {timelineOpen && (
           <TimelineBar
-            days={calendar?.days ?? []}
+            days={(calendar?.days ?? []).slice(-14)}
             selected={day}
             rangePreset={rangePreset}
             onSelect={next => {
@@ -559,7 +561,7 @@ export default function App() {
               setRangePreset(next ? 'day' : '7d')
             }}
             onRangePreset={applyRangePreset}
-            from={from}
+            from={shiftIsoDate(to, -7, from)}
             to={to}
             playing={playing}
             onPlay={() => setPlaying(value => !value)}

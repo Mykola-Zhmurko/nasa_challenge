@@ -287,6 +287,10 @@ a {
   filter: brightness(0.76) contrast(1.04);
 }
 
+.map[data-basemap="satellite"] .leaflet-tile-pane {
+  filter: brightness(0.7) saturate(0.9) contrast(1.05);
+}
+
 .leaflet-bottom.leaflet-left {
   left: 16px;
   bottom: 12px;
@@ -1042,31 +1046,67 @@ a {
   border-radius: 1px;
 }
 
-.year-strip {
+.multiyear-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.my-header,
+.my-row {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 4px;
+  grid-template-columns: 44px repeat(12, minmax(0, 1fr));
+  gap: 3px;
+  align-items: center;
+}
+
+.my-year-col,
+.my-month-col {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  text-align: center;
+  padding-bottom: 2px;
+}
+
+.my-year-col,
+.my-year-label {
+  text-align: left;
+  font-size: var(--fs-small);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.my-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .mcell {
-  height: 36px;
+  height: 26px;
+  border: 0;
   border-radius: 3px;
   background: var(--raised);
-  padding: 3px 6px;
+  padding: 0 3px;
   display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: center;
   font-size: var(--fs-small);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .mcell .v {
-  text-align: right;
+  text-align: center;
 }
 
 .mcell[aria-current="true"] {
-  outline: 1px solid var(--accent);
+  outline: 1.5px solid var(--accent);
   outline-offset: -1px;
 }
 

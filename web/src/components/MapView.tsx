@@ -33,9 +33,10 @@ import {
   DARK_NATIVE_ZOOM,
   MAX_ZOOM,
   MIN_ZOOM,
+  SATELLITE_NATIVE_ZOOM,
 } from '../../lib/zoom'
 
-export type Basemap = 'dark' | 'blue-marble'
+export type Basemap = 'satellite' | 'dark' | 'blue-marble'
 
 export interface SensorsEnabled {
   MODIS: boolean
@@ -500,7 +501,15 @@ export function MapView({
         attributionControl={false}
         style={{height: '100%', width: '100%'}}
       >
-        {basemap === 'dark' ? (
+        {basemap === 'satellite' ? (
+          <TileLayer
+            key="satellite"
+            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            maxZoom={MAX_ZOOM}
+            maxNativeZoom={SATELLITE_NATIVE_ZOOM}
+            attribution="Esri, Maxar, Earthstar Geographics"
+          />
+        ) : basemap === 'dark' ? (
           <TileLayer
             key="dark"
             url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
@@ -633,7 +642,7 @@ export function MapView({
 
       {colourBy === 'frp' ? (
         <div className="map-legend" role="region" aria-label="Fire radiative power legend">
-          <div className="map-legend-title">Fire radiative power (MW)</div>
+          <div className="map-legend-title">Viridis ramp · Fire radiative power (MW)</div>
           <div className="legend">
             {labels.map((label, index) => (
               <span className="legend-step" key={index}>
@@ -644,13 +653,13 @@ export function MapView({
           </div>
           <div className="map-legend-sub">
             {showPoints
-              ? `Dots = ${formatCount(filteredPoints.length)} individual detections, ordered by FRP (MW)`
-              : `Dots = ${formatCount(visibleCells.length)} H3 cells, size = detections`}
+              ? `Colour encodes detection FRP (MW) · ${formatCount(filteredPoints.length)} detections`
+              : `Colour encodes mean FRP (MW) · ${formatCount(visibleCells.length)} H3 cells, size = detections`}
           </div>
         </div>
       ) : (
         <div className="map-legend" role="region" aria-label="Detection age legend">
-          <div className="map-legend-title">Time since detection (hours)</div>
+          <div className="map-legend-title">Viridis ramp · Time since detection (hours)</div>
           <div className="legend" style={{gridTemplateColumns: 'repeat(4, 1fr)'}}>
             {AGE_LABELS.map((label, index) => (
               <span className="legend-step" key={label}>
@@ -660,7 +669,7 @@ export function MapView({
             ))}
           </div>
           <div className="map-legend-sub">
-            Only date is known (no UTC time); whole days treated as older than 24 h
+            Colour encodes hours since newest detection (daily records treated as older than 24 h)
           </div>
         </div>
       )}

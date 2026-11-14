@@ -7,6 +7,7 @@ from typing import Final
 BASE_DIR: Final[Path] = Path("/root/nasa-hotspots")
 DATA_DIR: Final[Path] = BASE_DIR / "data"
 RAW_DIR: Final[Path] = DATA_DIR / "raw"
+HISTORY_DIR: Final[Path] = DATA_DIR / "history"
 PARQUET_PATH: Final[Path] = DATA_DIR / "fires.parquet"
 DUCKDB_PATH: Final[Path] = DATA_DIR / "fires.duckdb"
 

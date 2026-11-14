@@ -346,7 +346,7 @@ export function ControlPanel({
               <p className="note">
                 {status === 'loading'
                   ? 'Loading hexagons…'
-                  : `${formatCount(totals.cells)}${totals.truncated ? '+' : ''} hexagons at level ${res} (~${formatCount(Math.round(h3.hexArea(res, h3.UNITS.km2)))} km2 each)${resAuto ? ', following zoom' : ''}, mean FRP (MW):`}
+                  : `Viridis ramp encodes mean FRP (MW) across ${formatCount(totals.cells)}${totals.truncated ? '+' : ''} H3 cells (level ${res}, ~${formatCount(Math.round(h3.hexArea(res, h3.UNITS.km2)))} km2):`}
               </p>
               <div className="legend">
                 {frpStepLabels(totals.frpCuts).map((label, index) => (
@@ -360,7 +360,7 @@ export function ControlPanel({
           ) : (
             <>
               <p className="note">
-                Time since detection relative to newest detection (whole days treated as older than 24 h):
+                Viridis ramp encodes hours since newest detection (daily records treated as &gt;24 h):
               </p>
               <div className="legend" style={{gridTemplateColumns: 'repeat(4, 1fr)'}}>
                 {AGE_LABELS.map((label, index) => (
@@ -380,6 +380,16 @@ export function ControlPanel({
             <button
               type="button"
               className="sensor-row"
+              aria-pressed={basemap === 'satellite'}
+              onClick={() => onBasemap('satellite')}
+            >
+              <EyeIcon active={basemap === 'satellite'} />
+              <span className="sensor-name">Satellite</span>
+              <span className="sensor-meta">Esri World Imagery</span>
+            </button>
+            <button
+              type="button"
+              className="sensor-row"
               aria-pressed={basemap === 'dark'}
               onClick={() => onBasemap('dark')}
             >
@@ -395,7 +405,7 @@ export function ControlPanel({
             >
               <EyeIcon active={basemap === 'blue-marble'} />
               <span className="sensor-name">Blue Marble</span>
-              <span className="sensor-meta">NASA GIBS</span>
+              <span className="sensor-meta">NASA GIBS, sharp to zoom 8</span>
             </button>
           </div>
         </section>

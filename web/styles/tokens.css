@@ -14,12 +14,12 @@
   --negative: #e5566f;
   --warning: #d9a441;
 
-  /* Fire ramp: the one hue family of the subject, used on data only */
-  --fire-1: #f6df7f;
-  --fire-2: #f0a33e;
-  --fire-3: #df6324;
-  --fire-4: #b8321a;
-  --fire-5: #7f170e;
+  /* Accessible Viridis colour-blind-safe sequential ramp */
+  --fire-1: #440154;
+  --fire-2: #3b528b;
+  --fire-3: #269994;
+  --fire-4: #5ec962;
+  --fire-5: #fde725;
 
   --radius-card: 6px;
   --radius-control: 4px;

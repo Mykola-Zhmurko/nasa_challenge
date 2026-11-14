@@ -60,11 +60,23 @@ export interface SensorTotals {
   VIIRS: number
 }
 
+export interface CalendarClimatology {
+  month: number
+  median_detections: number
+  mean_detections?: number
+}
+
+export interface CalendarAnomaly {
+  year: number
+  month: number
+  ratio: number
+}
+
 export interface CalendarResponse {
   months: CalendarMonth[]
   days: CalendarDay[]
-  climatology: {month: number; mean_detections: number}[]
-  anomaly: {year: number; month: number; ratio: number}[]
+  climatology: CalendarClimatology[]
+  anomaly: CalendarAnomaly[]
   totals: {detections: number; cells: number; sensors?: SensorTotals}
 }
 

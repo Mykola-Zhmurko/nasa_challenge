@@ -1,10 +1,10 @@
-/** The one hue family of the subject: pale yellow -> orange -> deep red. */
-export const FIRE_RAMP = ['#f6df7f', '#f0a33e', '#df6324', '#b8321a', '#7f170e']
+/** Perceptually uniform, colour-blind-safe 5-step Viridis ramp (dark violet -> teal -> yellow). */
+export const FIRE_RAMP = ['#440154', '#3b528b', '#269994', '#5ec962', '#fde725']
 
 export type ColourMode = 'frp' | 'age'
 
-/** FIRMS-style age buckets: red = 0-6 h, orange = 6-12 h, yellow = 12-24 h, grey = older (>24 h). */
-export const AGE_RAMP = ['#c4242a', '#f0a33e', '#f6df7f', '#6e7178'] as const
+/** Accessible Viridis age buckets: newest (bright yellow) to older (indigo/slate). */
+export const AGE_RAMP = ['#fde725', '#5ec962', '#269994', '#3b528b'] as const
 export const AGE_LABELS = ['0–6 h', '6–12 h', '12–24 h', 'Older'] as const
 
 export function parseDetectionTimestampMs(ts?: string | null, timeUtc?: string | null): number | null {
@@ -92,7 +92,7 @@ export function frpStepIndex(value: number, cuts: number[]): number {
 
 export function frpRampColor(value: number, cuts: number[]): string {
   const index = frpStepIndex(value, cuts)
-  return FIRE_RAMP[index] ?? '#f6df7f'
+  return FIRE_RAMP[index] ?? '#440154'
 }
 
 export function frpStepLabels(cuts: number[]): string[] {
@@ -105,7 +105,7 @@ export function frpStepLabels(cuts: number[]): string[] {
   })
 }
 
-/** Five steps of the fire ramp, read against the peak of the current view. */
+/** Five steps of the Viridis ramp, read against the peak of the current view. */
 export function stepIndex(value: number, peak: number): number {
   if (value <= 0 || peak <= 0) return -1
   const step = Math.floor((value / peak) * FIRE_RAMP.length)
@@ -114,12 +114,12 @@ export function stepIndex(value: number, peak: number): number {
 
 export function rampColor(value: number, peak: number): string {
   const index = stepIndex(value, peak)
-  return index < 0 ? '#2c2b2f' : FIRE_RAMP[index] ?? '#f6df7f'
+  return index < 0 ? '#2c2b2f' : FIRE_RAMP[index] ?? '#440154'
 }
 
-/** Ink that stays legible on a filled ramp step. */
+/** Ink that stays legible (>= 4.5:1 WCAG AA) on a filled Viridis ramp step. */
 export function rampInk(value: number, peak: number): string {
-  return stepIndex(value, peak) >= 3 ? '#ffffff' : '#14100d'
+  return stepIndex(value, peak) >= 2 ? '#101216' : '#ffffff'
 }
 
 /** Upper bound of each step, so the legend carries real numbers. */
@@ -147,10 +147,28 @@ export function formatCompact(value: number): string {
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTHS_FULL = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+]
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export function monthShort(month: number): string {
   return MONTHS[month - 1] ?? ''
+}
+
+export function monthFull(month: number): string {
+  return MONTHS_FULL[month - 1] ?? ''
 }
 
 export function weekdayShort(iso: string): string {

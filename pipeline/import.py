@@ -725,7 +725,7 @@ def run_import(
 
         con.execute("DROP TABLE _staging_deduped")
 
-        # Rebuild calendar_monthly and calendar_global tables
+        # Rebuild calendar_monthly, calendar_median, and calendar_global tables
         con.execute(
             """
             CREATE OR REPLACE TABLE calendar_monthly AS
@@ -738,6 +738,19 @@ def run_import(
             FROM fires
             GROUP BY h3_r8, year, month
             ORDER BY year, month, h3_r8
+            """
+        )
+
+        con.execute(
+            """
+            CREATE OR REPLACE TABLE calendar_median AS
+            SELECT
+                CAST(h3_r8 AS BIGINT) AS h3_r8,
+                CAST(month AS INTEGER) AS month,
+                CAST(MEDIAN(detections) AS DOUBLE) AS median_detections
+            FROM calendar_monthly
+            GROUP BY h3_r8, month
+            ORDER BY month, h3_r8
             """
         )
 

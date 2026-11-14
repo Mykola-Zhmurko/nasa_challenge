@@ -513,15 +513,24 @@ async def calendar(req: CalendarRequest):
             for r in days_rows
         ]
 
-        # Climatology from calendar_monthly (filtered spatially) or calendar_global
+        # Climatology from calendar_monthly (multi-year median and mean per month)
         if spatial_sql:
             clim_rows = con.execute(
                 f"""
+                WITH yearly AS (
+                    SELECT
+                        month,
+                        year,
+                        SUM(detections)::DOUBLE AS yr_detections
+                    FROM calendar_monthly
+                    WHERE {spatial_sql}
+                    GROUP BY month, year
+                )
                 SELECT
                     month,
-                    SUM(detections)::DOUBLE / GREATEST(COUNT(DISTINCT year), 1)::DOUBLE AS mean_detections
-                FROM calendar_monthly
-                WHERE {spatial_sql}
+                    MEDIAN(yr_detections) AS median_detections,
+                    AVG(yr_detections) AS mean_detections
+                FROM yearly
                 GROUP BY month
                 ORDER BY month
                 """,
@@ -530,12 +539,20 @@ async def calendar(req: CalendarRequest):
         else:
             clim_rows = con.execute(
                 """
+                WITH yearly AS (
+                    SELECT
+                        month,
+                        year,
+                        SUM(detections)::DOUBLE AS yr_detections
+                    FROM calendar_monthly
+                    GROUP BY month, year
+                )
                 SELECT
                     month,
-                    detections::DOUBLE / (
-                        SELECT GREATEST(COUNT(DISTINCT year), 1)::DOUBLE FROM calendar_monthly
-                    ) AS mean_detections
-                FROM calendar_global
+                    MEDIAN(yr_detections) AS median_detections,
+                    AVG(yr_detections) AS mean_detections
+                FROM yearly
+                GROUP BY month
                 ORDER BY month
                 """
             ).fetchall()
@@ -544,7 +561,11 @@ async def calendar(req: CalendarRequest):
             int(r[0]): float(r[1]) for r in clim_rows if r[1] is not None
         }
         climatology = [
-            {"month": int(r[0]), "mean_detections": round(float(r[1]), 2)}
+            {
+                "month": int(r[0]),
+                "median_detections": round(float(r[1]), 2),
+                "mean_detections": round(float(r[2]), 2) if r[2] is not None else 0.0,
+            }
             for r in clim_rows
             if r[1] is not None
         ]

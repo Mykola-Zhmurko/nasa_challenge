@@ -54,9 +54,15 @@ cd web && npm install && npm run dev      # open http://127.0.0.1:5173
 
 ## Data
 
-Fire data: **NASA FIRMS**. The public download covers the **last 7 days**; older years need a free
-FIRMS API key (`FIRMS_MAP_KEY` in `.env`). The app shows exactly what is loaded and never pretends
-to know more — days without data are marked as such.
+Fire data: **NASA FIRMS** (Fire Information for Resource Management System, NASA Earthdata) — the
+resource listed in this challenge's *Resources* tab. Concretely we use **Active Fire Data** and the
+**Archive Download** (via the FIRMS area API) from https://firms.modaps.eosdis.nasa.gov. The public
+download covers the **last 7 days**; older years need a free FIRMS API key (`FIRMS_MAP_KEY` in
+`.env`). The app shows exactly what is loaded and never pretends to know more — days without data
+are marked as such.
+
+Note on sensors: Suomi-NPP stopped delivering new data, so the live window uses **NOAA-20 (J1)**;
+SNPP appears only in the historical archive.
 
 ## Screenshots
 
