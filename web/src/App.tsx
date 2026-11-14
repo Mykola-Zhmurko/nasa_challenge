@@ -4,7 +4,7 @@ import '../styles/tokens.css'
 import '../styles/app.css'
 import type {BBox, CalendarResponse, Cell, Health, SensorTotals, Status} from '../lib/api'
 import {exportCsvHref, fetchCalendar, fetchCells, fetchHealth} from '../lib/api'
-import {type ColourMode, formatDay, frpCuts, shiftIsoDate} from '../lib/ramp'
+import {formatDay, frpCuts, shiftIsoDate} from '../lib/ramp'
 import {resForZoom} from '../lib/zoom'
 import {TopBar} from './components/TopBar'
 import {ControlPanel, type ModeTab, type Preset, type TimeRangePreset} from './components/ControlPanel'
@@ -31,7 +31,6 @@ interface InitialUrlState {
   day: string | null
   pinnedRes: number | null
   basemap: Basemap
-  colourBy: ColourMode
   sensorsEnabled: SensorsEnabled
 }
 
@@ -43,7 +42,6 @@ function readInitialUrlState(): InitialUrlState {
     day: null,
     pinnedRes: null,
     basemap: 'satellite',
-    colourBy: 'frp',
     sensorsEnabled: {MODIS: true, VIIRS: true},
   }
   if (typeof window === 'undefined') return defaults
@@ -80,19 +78,14 @@ function readInitialUrlState(): InitialUrlState {
   const rawRes = params.get('res')
   if (rawRes && rawRes !== 'auto') {
     const parsed = Number(rawRes)
-    if (Number.isInteger(parsed) && parsed >= 3 && parsed <= 8) {
-      defaults.pinnedRes = parsed
+    if (Number.isInteger(parsed)) {
+      defaults.pinnedRes = Math.min(7, Math.max(4, parsed))
     }
   }
 
   const rawBasemap = params.get('basemap')
   if (rawBasemap === 'satellite' || rawBasemap === 'dark' || rawBasemap === 'blue-marble') {
     defaults.basemap = rawBasemap
-  }
-
-  const rawColour = params.get('colour')
-  if (rawColour === 'frp' || rawColour === 'age') {
-    defaults.colourBy = rawColour
   }
 
   const rawSensors = params.get('sensors')
@@ -116,6 +109,8 @@ function weightedFrp(months: CalendarResponse['months'] | undefined): number {
 }
 
 export default function App() {
+  ;(window as unknown as {__renders?: number}).__renders =
+    ((window as unknown as {__renders?: number}).__renders ?? 0) + 1
   const initial = useMemo(() => readInitialUrlState(), [])
 
   const [health, setHealth] = useState<Health | null>(null)
@@ -125,7 +120,6 @@ export default function App() {
   const [pinnedRes, setPinnedRes] = useState<number | null>(initial.pinnedRes)
   const res = pinnedRes ?? resForZoom(zoom)
   const [basemap, setBasemap] = useState<Basemap>(initial.basemap)
-  const [colourBy, setColourBy] = useState<ColourMode>(initial.colourBy)
   const [sensorsEnabled, setSensorsEnabled] = useState<SensorsEnabled>(initial.sensorsEnabled)
   const [rangePreset, setRangePreset] = useState<TimeRangePreset>(initial.rangePreset)
   const [day, setDay] = useState<string | null>(initial.day)
@@ -186,6 +180,9 @@ export default function App() {
   }, [reload])
 
   useEffect(() => {
+    // From zoom 8 on the map draws individual detections, so hexagon cells are not
+    // visible; refetching them on every zoom band only costs time.
+    if (zoom >= 8) return
     const controller = new AbortController()
     setCellsStatus('loading')
     fetchCells({res, from: rangeFrom, to: rangeTo, bbox}, controller.signal).then(result => {
@@ -196,7 +193,7 @@ export default function App() {
       setTruncated(result.data?.truncated ?? false)
     })
     return () => controller.abort()
-  }, [bbox, res, rangeFrom, rangeTo, reload])
+  }, [bbox, res, rangeFrom, rangeTo, reload, zoom])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -209,9 +206,14 @@ export default function App() {
     return () => controller.abort()
   }, [bbox, from, to, res, reload])
 
+  const calendarSensorsRef = useRef<CalendarResponse['totals']['sensors'] | undefined>(undefined)
+  useEffect(() => {
+    calendarSensorsRef.current = calendar?.totals.sensors
+  }, [calendar])
+
   useEffect(() => {
     if (rangeFrom === from && rangeTo === to) {
-      setRangeSensors(calendar?.totals.sensors)
+      setRangeSensors(calendarSensorsRef.current)
       return
     }
     const controller = new AbortController()
@@ -221,7 +223,7 @@ export default function App() {
       }
     })
     return () => controller.abort()
-  }, [bbox, from, to, rangeFrom, rangeTo, res, calendar?.totals.sensors])
+  }, [bbox, from, to, rangeFrom, rangeTo, res])
 
   useEffect(() => {
     if (!playing) return
@@ -338,7 +340,6 @@ export default function App() {
     }
     params.set('res', pinnedRes === null ? 'auto' : String(res))
     params.set('basemap', basemap)
-    params.set('colour', colourBy)
     const activeSensors = [
       sensorsEnabled.MODIS ? 'MODIS' : null,
       sensorsEnabled.VIIRS ? 'VIIRS' : null,
@@ -368,7 +369,6 @@ export default function App() {
   const reset = () => {
     applyPreset('world')
     setPinnedRes(null)
-    setColourBy('frp')
     setBasemap('satellite')
     setSensorsEnabled({MODIS: true, VIIRS: true})
     setDay(null)
@@ -400,7 +400,6 @@ export default function App() {
           rangeFrom={rangeFrom}
           rangeTo={rangeTo}
           basemap={basemap}
-          colourBy={colourBy}
           sensorsEnabled={sensorsEnabled}
           areaSensors={totals.sensors}
           drawing={drawing}
@@ -425,12 +424,6 @@ export default function App() {
           onToggleSensor={handleToggleSensor}
           basemap={basemap}
           onBasemap={setBasemap}
-          res={res}
-          resAuto={pinnedRes === null}
-          onRes={setPinnedRes}
-          onResAuto={() => setPinnedRes(null)}
-          colourBy={colourBy}
-          onColourBy={setColourBy}
           drawing={drawing}
           onDrawing={setDrawing}
           csvHref={csvHref}
@@ -521,8 +514,8 @@ export default function App() {
                 <h3>Using the interface</h3>
                 <p>
                   Use the right <b>MODE</b> panel to switch between 24HRS, 3 DAYS, and 7 DAYS, toggle
-                  sensors, change hexagon resolution or colour mode (Fire power in MW vs Age in hours), and
-                  export filtered detections as CSV. Zoom to level 8+ to inspect individual FIRMS points.
+                  sensors, and export filtered detections as CSV. Hexagon size follows the map zoom, and
+                  zooming to level 8+ reveals individual FIRMS points.
                 </p>
               </div>
             </div>

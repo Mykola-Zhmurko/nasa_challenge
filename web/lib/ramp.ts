@@ -1,34 +1,12 @@
 /** Perceptually uniform, colour-blind-safe 5-step Viridis ramp (dark violet -> teal -> yellow). */
 export const FIRE_RAMP = ['#440154', '#3b528b', '#269994', '#5ec962', '#fde725']
 
-export type ColourMode = 'frp' | 'age'
-
-/** Accessible Viridis age buckets: newest (bright yellow) to older (indigo/slate). */
-export const AGE_RAMP = ['#fde725', '#5ec962', '#269994', '#3b528b'] as const
-export const AGE_LABELS = ['0–6 h', '6–12 h', '12–24 h', 'Older'] as const
-
 export function parseDetectionTimestampMs(ts?: string | null, timeUtc?: string | null): number | null {
   if (!ts || !timeUtc) return null
   const trimmed = timeUtc.trim()
   if (!/^\d{2}:\d{2}/.test(trimmed)) return null
   const ms = Date.parse(`${ts}T${trimmed.slice(0, 5)}:00Z`)
   return Number.isFinite(ms) ? ms : null
-}
-
-export function ageRampColor(
-  ts: string | null | undefined,
-  timeUtc: string | null | undefined,
-  newestMs: number | null,
-): string {
-  const itemMs = parseDetectionTimestampMs(ts, timeUtc)
-  if (itemMs === null || newestMs === null || !Number.isFinite(newestMs)) {
-    return AGE_RAMP[3]
-  }
-  const ageHours = Math.max(0, (newestMs - itemMs) / 3_600_000)
-  if (ageHours <= 6) return AGE_RAMP[0]
-  if (ageHours <= 12) return AGE_RAMP[1]
-  if (ageHours <= 24) return AGE_RAMP[2]
-  return AGE_RAMP[3]
 }
 
 export function formatConfidence(sensor: string, pct: number): string {

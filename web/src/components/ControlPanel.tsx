@@ -1,10 +1,6 @@
 import {useEffect, useState} from 'react'
-import * as h3 from 'h3-js'
 import type {BBox, SensorTotals, Status} from '../../lib/api'
 import {
-  AGE_LABELS,
-  AGE_RAMP,
-  type ColourMode,
   FIRE_RAMP,
   formatCount,
   formatDay,
@@ -37,12 +33,6 @@ interface ControlPanelProps {
   onToggleSensor: (sensor: 'MODIS' | 'VIIRS') => void
   basemap: Basemap
   onBasemap: (basemap: Basemap) => void
-  res: number
-  resAuto: boolean
-  onRes: (res: number) => void
-  onResAuto: () => void
-  colourBy: ColourMode
-  onColourBy: (mode: ColourMode) => void
   drawing: boolean
   onDrawing: (value: boolean) => void
   csvHref: string
@@ -63,8 +53,6 @@ interface ControlPanelProps {
   open: boolean
   onClose: () => void
 }
-
-const RES_OPTIONS = [3, 4, 5, 6, 7, 8]
 
 const CheckIcon = ({active}: {active: boolean}) => (
   <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
@@ -111,12 +99,6 @@ export function ControlPanel({
   onToggleSensor,
   basemap,
   onBasemap,
-  res,
-  resAuto,
-  onRes,
-  onResAuto,
-  colourBy,
-  onColourBy,
   drawing,
   onDrawing,
   csvHref,
@@ -299,79 +281,20 @@ export function ControlPanel({
 
         <section className="section">
           <h3>Layers</h3>
-          <div className="sub-label">Colour mode</div>
-          <div className="seg" role="group" aria-label="Colour by">
-            <button
-              type="button"
-              aria-pressed={colourBy === 'frp'}
-              onClick={() => onColourBy('frp')}
-            >
-              Fire power
-            </button>
-            <button
-              type="button"
-              aria-pressed={colourBy === 'age'}
-              onClick={() => onColourBy('age')}
-            >
-              Age
-            </button>
-          </div>
-
-          <div className="sub-label" style={{marginTop: 10}}>
-            Hexagon size
-          </div>
-          <div className="seg" role="group" aria-label="Hexagon size">
-            <button
-              type="button"
-              aria-pressed={resAuto}
-              onClick={onResAuto}
-              aria-label="Hexagon resolution follows map zoom"
-            >
-              Auto
-            </button>
-            {RES_OPTIONS.map(option => (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={!resAuto && res === option}
-                onClick={() => onRes(option)}
-                aria-label={`Hexagon resolution ${option}`}
-              >
-                {option}
-              </button>
+          <div className="sub-label">Fire power (MW)</div>
+          <p className="note">
+            {status === 'loading'
+              ? 'Loading hexagons…'
+              : `Viridis ramp encodes mean FRP (MW) across ${formatCount(totals.cells)}${totals.truncated ? '+' : ''} H3 cells:`}
+          </p>
+          <div className="legend">
+            {frpStepLabels(totals.frpCuts).map((label, index) => (
+              <span className="legend-step" key={index}>
+                <span className="legend-bar" style={{background: FIRE_RAMP[index]}} />
+                <span className="legend-value">{label}</span>
+              </span>
             ))}
           </div>
-          {colourBy === 'frp' ? (
-            <>
-              <p className="note">
-                {status === 'loading'
-                  ? 'Loading hexagons…'
-                  : `Viridis ramp encodes mean FRP (MW) across ${formatCount(totals.cells)}${totals.truncated ? '+' : ''} H3 cells (level ${res}, ~${formatCount(Math.round(h3.hexArea(res, h3.UNITS.km2)))} km2):`}
-              </p>
-              <div className="legend">
-                {frpStepLabels(totals.frpCuts).map((label, index) => (
-                  <span className="legend-step" key={index}>
-                    <span className="legend-bar" style={{background: FIRE_RAMP[index]}} />
-                    <span className="legend-value">{label}</span>
-                  </span>
-                ))}
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="note">
-                Viridis ramp encodes hours since newest detection (daily records treated as &gt;24 h):
-              </p>
-              <div className="legend" style={{gridTemplateColumns: 'repeat(4, 1fr)'}}>
-                {AGE_LABELS.map((label, index) => (
-                  <span className="legend-step" key={label}>
-                    <span className="legend-bar" style={{background: AGE_RAMP[index]}} />
-                    <span className="legend-value">{label}</span>
-                  </span>
-                ))}
-              </div>
-            </>
-          )}
 
           <div className="sub-label" style={{marginTop: 10}}>
             Static backgrounds
