@@ -1,6 +1,59 @@
 /** The one hue family of the subject: pale yellow -> orange -> deep red. */
 export const FIRE_RAMP = ['#f6df7f', '#f0a33e', '#df6324', '#b8321a', '#7f170e']
 
+export type ColourMode = 'frp' | 'age'
+
+/** FIRMS-style age buckets: red = 0-6 h, orange = 6-12 h, yellow = 12-24 h, grey = older (>24 h). */
+export const AGE_RAMP = ['#c4242a', '#f0a33e', '#f6df7f', '#6e7178'] as const
+export const AGE_LABELS = ['0–6 h', '6–12 h', '12–24 h', 'Older'] as const
+
+export function parseDetectionTimestampMs(ts?: string | null, timeUtc?: string | null): number | null {
+  if (!ts || !timeUtc) return null
+  const trimmed = timeUtc.trim()
+  if (!/^\d{2}:\d{2}/.test(trimmed)) return null
+  const ms = Date.parse(`${ts}T${trimmed.slice(0, 5)}:00Z`)
+  return Number.isFinite(ms) ? ms : null
+}
+
+export function ageRampColor(
+  ts: string | null | undefined,
+  timeUtc: string | null | undefined,
+  newestMs: number | null,
+): string {
+  const itemMs = parseDetectionTimestampMs(ts, timeUtc)
+  if (itemMs === null || newestMs === null || !Number.isFinite(newestMs)) {
+    return AGE_RAMP[3]
+  }
+  const ageHours = Math.max(0, (newestMs - itemMs) / 3_600_000)
+  if (ageHours <= 6) return AGE_RAMP[0]
+  if (ageHours <= 12) return AGE_RAMP[1]
+  if (ageHours <= 24) return AGE_RAMP[2]
+  return AGE_RAMP[3]
+}
+
+export function formatConfidence(sensor: string, pct: number): string {
+  if (sensor.toUpperCase() === 'VIIRS') {
+    return pct >= 80 ? `High (${pct}%)` : `Nominal (${pct}%)`
+  }
+  return `${pct}% (${pct >= 80 ? 'high' : 'nominal'})`
+}
+
+export function formatDayNight(dn: string): string {
+  const norm = dn.trim().toUpperCase()
+  if (norm === 'D') return 'Day (D)'
+  if (norm === 'N') return 'Night (N)'
+  return dn || '—'
+}
+
+export function formatSatellite(sat: string): string {
+  const norm = sat.trim().toUpperCase()
+  if (norm === 'T') return 'Terra (T)'
+  if (norm === 'A') return 'Aqua (A)'
+  if (norm === 'N') return 'Suomi NPP (N)'
+  if (norm === 'N20' || norm === 'J1') return 'NOAA-20 (N20)'
+  return sat || '—'
+}
+
 const DEFAULT_FRP_CUTS = [2.5, 5, 10, 25, 100]
 
 /** Five quantile upper bounds (MW) derived from the loaded cells' mean_frp. */
@@ -126,6 +179,15 @@ export function formatRange(from: string, to: string): string {
 export function formatDay(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`)
   return `${String(d.getUTCDate()).padStart(2, '0')} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+}
+
+/** Shift an ISO YYYY-MM-DD date by deltaDays, optionally clamped to minIso. */
+export function shiftIsoDate(iso: string, deltaDays: number, minIso?: string): string {
+  const ms = Date.parse(`${iso}T00:00:00Z`)
+  if (!Number.isFinite(ms)) return iso
+  const shifted = new Date(ms + deltaDays * 86_400_000).toISOString().slice(0, 10)
+  if (minIso && shifted < minIso) return minIso
+  return shifted
 }
 
 export function daysInMonth(year: number, month: number): number {

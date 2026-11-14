@@ -1,8 +1,17 @@
 export const MAX_ZOOM = 16
 export const MIN_ZOOM = 2
 
-/** Deepest native tile level of the NASA GIBS Blue Marble layer; deeper zooms upscale it. */
-export const SAT_NATIVE_ZOOM = 8
+/** Deepest native tile level of the Esri Dark Gray Canvas basemap; MAX_ZOOM stays below it so tiles are never upscaled. */
+export const DARK_NATIVE_ZOOM = 16
+
+/** Deepest native tile level of the Esri World Imagery basemap. */
+export const SATELLITE_NATIVE_ZOOM = 19
+
+/** Deepest native tile level of the NASA GIBS Blue Marble WMTS layer. */
+export const BLUE_MARBLE_NATIVE_ZOOM = 8
+
+/** Deepest native tile level of the Esri World Boundaries and Places reference overlay. */
+export const BORDERS_NATIVE_ZOOM = 16
 
 /**
  * Hexagon level that matches the ground scale of a map zoom, so zooming in reveals

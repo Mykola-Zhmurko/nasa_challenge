@@ -333,6 +333,109 @@ async def cells(
         con.close()
 
 
+@app.get("/api/points")
+async def points(
+    bbox: Optional[str] = Query(None),
+    from_: Optional[str] = Query(None, alias="from"),
+    from_date: Optional[str] = Query(None),
+    to: Optional[str] = Query(None),
+    limit: int = Query(5000, ge=1, le=20000),
+    offset: int = Query(0, ge=0),
+):
+    """Individual hotspot detections ordered by FRP descending."""
+    con, ready = get_connection()
+    if not ready or con is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "data_not_ready"},
+        )
+
+    try:
+        conditions: List[str] = []
+        params: List[object] = []
+
+        start_raw = from_ if from_ is not None else from_date
+        start_iso: Optional[str] = None
+        end_iso: Optional[str] = None
+
+        try:
+            if start_raw is not None:
+                start_iso = parse_iso_date(start_raw, "from")
+                conditions.append("ts >= ?")
+                params.append(start_iso)
+            if to is not None:
+                end_iso = parse_iso_date(to, "to")
+                conditions.append("ts <= ?")
+                params.append(end_iso)
+            if start_iso and end_iso and start_iso > end_iso:
+                raise ValueError("'from' date must be on or before 'to' date")
+            if bbox is not None:
+                minlon, minlat, maxlon, maxlat = parse_bbox_str(bbox)
+                conditions.append("lat >= ? AND lat <= ? AND lon >= ? AND lon <= ?")
+                params.extend([minlat, maxlat, minlon, maxlon])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        count_row = con.execute(
+            f"SELECT COUNT(*) FROM fires {where_sql}",
+            params,
+        ).fetchone()
+        total = int(count_row[0]) if count_row and count_row[0] is not None else 0
+
+        col_rows = con.execute("PRAGMA table_info('fires')").fetchall()
+        col_names = {str(c[1]).lower() for c in col_rows}
+        time_expr = (
+            "CAST(time_utc AS VARCHAR)"
+            if "time_utc" in col_names
+            else ("CAST(acq_time AS VARCHAR)" if "acq_time" in col_names else "NULL")
+        )
+
+        query = f"""
+            SELECT
+                CAST(ts AS VARCHAR) AS ts,
+                {time_expr} AS time_utc,
+                lat,
+                lon,
+                sensor,
+                satellite,
+                confidence_pct,
+                frp_mw,
+                daynight,
+                h3_h3_to_string(h3_r8) AS h3_r8
+            FROM fires
+            {where_sql}
+            ORDER BY frp_mw DESC, ts DESC, h3_r8 ASC
+            LIMIT ? OFFSET ?
+        """
+        rows = con.execute(query, [*params, limit, offset]).fetchall()
+
+        result_points = [
+            {
+                "ts": str(r[0]),
+                "time_utc": str(r[1]) if r[1] is not None else None,
+                "lat": round(float(r[2]), 5) if r[2] is not None else 0.0,
+                "lon": round(float(r[3]), 5) if r[3] is not None else 0.0,
+                "sensor": str(r[4]) if r[4] is not None else "",
+                "satellite": str(r[5]) if r[5] is not None else "",
+                "confidence_pct": int(r[6]) if r[6] is not None else 0,
+                "frp_mw": round(float(r[7]), 2) if r[7] is not None else 0.0,
+                "daynight": str(r[8]) if r[8] is not None else "",
+                "h3_r8": str(r[9]),
+            }
+            for r in rows
+        ]
+        truncated = (offset + len(result_points)) < total
+        return {
+            "points": result_points,
+            "total": total,
+            "truncated": truncated,
+        }
+    finally:
+        con.close()
+
+
 @app.post("/api/calendar")
 async def calendar(req: CalendarRequest):
     """Monthly burning activity calendar with climatology, anomaly, and sensor totals."""

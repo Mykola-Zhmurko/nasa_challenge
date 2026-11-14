@@ -1,37 +1,48 @@
 import type {CalendarDay} from '../../lib/api'
 import {dayNumber, formatCount, formatRange, monthShort, rampColor, weekdayShort} from '../../lib/ramp'
+import type {TimeRangePreset} from './ControlPanel'
 
 interface TimelineBarProps {
   days: CalendarDay[]
   selected: string | null
+  rangePreset: TimeRangePreset
   onSelect: (day: string | null) => void
+  onRangePreset: (preset: '24h' | '3d' | '7d') => void
   from: string
   to: string
   playing: boolean
   onPlay: () => void
-  calendarOpen: boolean
-  onToggleCalendar: () => void
+  onClose: () => void
 }
 
 export function TimelineBar({
   days,
   selected,
+  rangePreset,
   onSelect,
+  onRangePreset,
   from,
   to,
   playing,
   onPlay,
-  calendarOpen,
-  onToggleCalendar,
+  onClose,
 }: TimelineBarProps) {
   const peak = days.reduce((max, day) => Math.max(max, day.detections), 1)
   const today = new Date().toISOString().slice(0, 10)
   const partial = to === today ? today : null
 
   return (
-    <footer className="timeline" aria-label="Day timeline">
+    <section className="timeline-strip" aria-label="Day timeline">
       <div className="tl-caption">
-        <span className="m">{selected ? 'Selected day' : 'Loaded window'}</span>
+        <span className="m">
+          {rangePreset === '24h'
+            ? '24HRS window'
+            : rangePreset === '3d'
+              ? '3 DAYS window'
+              : selected
+                ? 'Selected day'
+                : 'Loaded window'}
+        </span>
         <span className="d">{selected ? formatDayShort(selected) : formatRange(from, to)}</span>
         {partial && <span className="m">{formatDayShort(partial)} still filling</span>}
       </div>
@@ -40,7 +51,7 @@ export function TimelineBar({
         <button
           type="button"
           className="day"
-          aria-pressed={selected === null}
+          aria-pressed={selected === null && rangePreset === '7d'}
           onClick={() => onSelect(null)}
         >
           <span className="wd">All {days.length} days</span>
@@ -79,19 +90,45 @@ export function TimelineBar({
       </div>
 
       <div className="tl-actions">
-        <button type="button" className="btn" aria-pressed={playing} onClick={onPlay}>
-          {playing ? 'Pause' : 'Play days'}
+        <button
+          type="button"
+          className="btn"
+          aria-pressed={rangePreset === '24h'}
+          onClick={() => onRangePreset('24h')}
+        >
+          24HRS
         </button>
         <button
           type="button"
           className="btn"
-          aria-pressed={calendarOpen}
-          onClick={onToggleCalendar}
+          aria-pressed={rangePreset === '3d'}
+          onClick={() => onRangePreset('3d')}
         >
-          Burning calendar
+          3 DAYS
+        </button>
+        <button
+          type="button"
+          className="btn"
+          aria-pressed={rangePreset === '7d'}
+          onClick={() => onRangePreset('7d')}
+        >
+          7 DAYS
+        </button>
+        <button type="button" className="btn" aria-pressed={playing} onClick={onPlay}>
+          {playing ? 'Pause' : 'Play'}
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={onClose}
+          aria-label="Close timeline"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.4" fill="none" />
+          </svg>
         </button>
       </div>
-    </footer>
+    </section>
   )
 }
 

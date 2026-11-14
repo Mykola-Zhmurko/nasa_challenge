@@ -1,7 +1,16 @@
 import {useEffect, useState} from 'react'
 import * as h3 from 'h3-js'
 import type {BBox, SensorTotals, Status} from '../../lib/api'
-import {FIRE_RAMP, formatCount, frpStepLabels} from '../../lib/ramp'
+import {
+  AGE_LABELS,
+  AGE_RAMP,
+  type ColourMode,
+  FIRE_RAMP,
+  formatCount,
+  formatDay,
+  frpStepLabels,
+} from '../../lib/ramp'
+import type {Basemap, SensorsEnabled} from './MapView'
 
 export interface Preset {
   id: string
@@ -9,18 +18,34 @@ export interface Preset {
   bbox: BBox
 }
 
+export type TimeRangePreset = '24h' | '3d' | '7d' | 'day'
+export type ModeTab = 'simple' | 'time'
+
 interface ControlPanelProps {
   bbox: BBox
   areaId: string
   presets: Preset[]
   onPreset: (id: string) => void
   onBBox: (bbox: BBox) => void
+  rangePreset: TimeRangePreset
+  onRangePreset: (preset: '24h' | '3d' | '7d') => void
+  rangeFrom: string
+  rangeTo: string
+  modeTab: ModeTab
+  onModeTab: (tab: ModeTab) => void
+  sensorsEnabled: SensorsEnabled
+  onToggleSensor: (sensor: 'MODIS' | 'VIIRS') => void
+  basemap: Basemap
+  onBasemap: (basemap: Basemap) => void
   res: number
   resAuto: boolean
   onRes: (res: number) => void
   onResAuto: () => void
+  colourBy: ColourMode
+  onColourBy: (mode: ColourMode) => void
   drawing: boolean
   onDrawing: (value: boolean) => void
+  csvHref: string
   totals: {
     detections: number
     cells: number
@@ -41,18 +66,60 @@ interface ControlPanelProps {
 
 const RES_OPTIONS = [3, 4, 5, 6, 7, 8]
 
+const CheckIcon = ({active}: {active: boolean}) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+    {active ? (
+      <path
+        d="M2.5 7.2L5.6 10.3L11.5 3.8"
+        stroke="#44a282"
+        strokeWidth="1.8"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    ) : (
+      <rect x="2.5" y="2.5" width="9" height="9" rx="1.5" stroke="#6e7178" strokeWidth="1.2" fill="none" />
+    )}
+  </svg>
+)
+
+const EyeIcon = ({active}: {active: boolean}) => (
+  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+    <path
+      d="M1.5 8C3.2 4.8 5.5 3.3 8 3.3C10.5 3.3 12.8 4.8 14.5 8C12.8 11.2 10.5 12.7 8 12.7C5.5 12.7 3.2 11.2 1.5 8Z"
+      stroke={active ? '#44a282' : '#8d9096'}
+      strokeWidth="1.3"
+      fill="none"
+    />
+    <circle cx="8" cy="8" r="2.1" fill={active ? '#44a282' : '#8d9096'} />
+  </svg>
+)
+
 export function ControlPanel({
   bbox,
   areaId,
   presets,
   onPreset,
   onBBox,
+  rangePreset,
+  onRangePreset,
+  rangeFrom,
+  rangeTo,
+  modeTab,
+  onModeTab,
+  sensorsEnabled,
+  onToggleSensor,
+  basemap,
+  onBasemap,
   res,
   resAuto,
   onRes,
   onResAuto,
+  colourBy,
+  onColourBy,
   drawing,
   onDrawing,
+  csvHref,
   totals,
   status,
   error,
@@ -89,19 +156,22 @@ export function ControlPanel({
     onBBox(next)
   }
 
+  const modisCount = totals.sensors?.MODIS ?? 0
+  const viirsCount = totals.sensors?.VIIRS ?? 0
+
   return (
     <aside
       className={open ? 'panel panel-open' : 'panel'}
-      id="layers-panel"
-      aria-label="Map layers and totals"
+      id="mode-panel"
+      aria-label="Mode, sensors, layers, and overlays"
     >
       <div className="panel-head">
-        <h2>Layers</h2>
+        <h2>MODE</h2>
         <div className="spacer" />
         <button type="button" className="btn btn-quiet" onClick={onReset}>
           Reset
         </button>
-        <button type="button" className="icon-btn only-mobile" onClick={onClose} aria-label="Close layers">
+        <button type="button" className="icon-btn" onClick={onClose} aria-label="Close mode panel">
           <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
             <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.4" fill="none" />
           </svg>
@@ -110,8 +180,91 @@ export function ControlPanel({
 
       <div className="panel-body">
         <section className="section">
-          <h3>Totals</h3>
-          <div className="totals">
+          <div className="range-btns" role="group" aria-label="Time range">
+            <button
+              type="button"
+              className="range-btn"
+              aria-pressed={rangePreset === '24h'}
+              onClick={() => onRangePreset('24h')}
+            >
+              24HRS
+            </button>
+            <button
+              type="button"
+              className="range-btn"
+              aria-pressed={rangePreset === '3d'}
+              onClick={() => onRangePreset('3d')}
+            >
+              3 DAYS
+            </button>
+            <button
+              type="button"
+              className="range-btn"
+              aria-pressed={rangePreset === '7d'}
+              onClick={() => onRangePreset('7d')}
+            >
+              7 DAYS
+            </button>
+          </div>
+          <p className="range-line">
+            From <b>{formatDay(rangeFrom)}</b> to <b>{formatDay(rangeTo)}</b>
+          </p>
+
+          <div className="mode-tabs" role="tablist" aria-label="Display mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={modeTab === 'simple'}
+              className={modeTab === 'simple' ? 'mode-tab active' : 'mode-tab'}
+              onClick={() => onModeTab('simple')}
+            >
+              Simple
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={modeTab === 'time'}
+              className={modeTab === 'time' ? 'mode-tab active' : 'mode-tab'}
+              onClick={() => onModeTab('time')}
+            >
+              Time based
+            </button>
+          </div>
+          {modeTab === 'time' && (
+            <p className="note">
+              Burning calendar sheet is open below. Select any day cell to filter the map to that date.
+            </p>
+          )}
+        </section>
+
+        <section className="section">
+          <h3>Sensors</h3>
+          <div className="sensor-list" role="group" aria-label="Satellite sensors">
+            <button
+              type="button"
+              className="sensor-row"
+              aria-pressed={sensorsEnabled.MODIS}
+              onClick={() => onToggleSensor('MODIS')}
+            >
+              <CheckIcon active={sensorsEnabled.MODIS} />
+              <span className="sensor-name">MODIS</span>
+              <span className="sensor-meta">1 km</span>
+              <span className="sensor-count">{formatCount(modisCount)}</span>
+            </button>
+            <button
+              type="button"
+              className="sensor-row"
+              aria-pressed={sensorsEnabled.VIIRS}
+              onClick={() => onToggleSensor('VIIRS')}
+            >
+              <CheckIcon active={sensorsEnabled.VIIRS} />
+              <span className="sensor-name">VIIRS NOAA-20</span>
+              <span className="sensor-meta">375 m</span>
+              <span className="sensor-count">{formatCount(viirsCount)}</span>
+            </button>
+          </div>
+
+          <div className="totals" style={{marginTop: 10}}>
             <div className="total">
               <span className="k">Hotspots</span>
               <span className="v">{formatCount(totals.detections)}</span>
@@ -125,11 +278,6 @@ export function ControlPanel({
               <span className="v">{totals.meanFrp > 0 ? `${totals.meanFrp.toFixed(1)} MW` : '—'}</span>
             </div>
           </div>
-          {totals.sensors && (totals.sensors.MODIS > 0 || totals.sensors.VIIRS > 0) && (
-            <p className="note">
-              Sensors: MODIS {formatCount(totals.sensors.MODIS)} · VIIRS {formatCount(totals.sensors.VIIRS)}
-            </p>
-          )}
 
           {status === 'not-ready' && (
             <div className="notice">
@@ -150,7 +298,110 @@ export function ControlPanel({
         </section>
 
         <section className="section">
-          <h3>Area of interest</h3>
+          <h3>Layers</h3>
+          <div className="sub-label">Colour mode</div>
+          <div className="seg" role="group" aria-label="Colour by">
+            <button
+              type="button"
+              aria-pressed={colourBy === 'frp'}
+              onClick={() => onColourBy('frp')}
+            >
+              Fire power
+            </button>
+            <button
+              type="button"
+              aria-pressed={colourBy === 'age'}
+              onClick={() => onColourBy('age')}
+            >
+              Age
+            </button>
+          </div>
+
+          <div className="sub-label" style={{marginTop: 10}}>
+            Hexagon size
+          </div>
+          <div className="seg" role="group" aria-label="Hexagon size">
+            <button
+              type="button"
+              aria-pressed={resAuto}
+              onClick={onResAuto}
+              aria-label="Hexagon resolution follows map zoom"
+            >
+              Auto
+            </button>
+            {RES_OPTIONS.map(option => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={!resAuto && res === option}
+                onClick={() => onRes(option)}
+                aria-label={`Hexagon resolution ${option}`}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          {colourBy === 'frp' ? (
+            <>
+              <p className="note">
+                {status === 'loading'
+                  ? 'Loading hexagons…'
+                  : `${formatCount(totals.cells)}${totals.truncated ? '+' : ''} hexagons at level ${res} (~${formatCount(Math.round(h3.hexArea(res, h3.UNITS.km2)))} km2 each)${resAuto ? ', following zoom' : ''}, mean FRP (MW):`}
+              </p>
+              <div className="legend">
+                {frpStepLabels(totals.frpCuts).map((label, index) => (
+                  <span className="legend-step" key={index}>
+                    <span className="legend-bar" style={{background: FIRE_RAMP[index]}} />
+                    <span className="legend-value">{label}</span>
+                  </span>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="note">
+                Time since detection relative to newest detection (whole days treated as older than 24 h):
+              </p>
+              <div className="legend" style={{gridTemplateColumns: 'repeat(4, 1fr)'}}>
+                {AGE_LABELS.map((label, index) => (
+                  <span className="legend-step" key={label}>
+                    <span className="legend-bar" style={{background: AGE_RAMP[index]}} />
+                    <span className="legend-value">{label}</span>
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="sub-label" style={{marginTop: 10}}>
+            Static backgrounds
+          </div>
+          <div className="sensor-list" role="group" aria-label="Basemap">
+            <button
+              type="button"
+              className="sensor-row"
+              aria-pressed={basemap === 'dark'}
+              onClick={() => onBasemap('dark')}
+            >
+              <EyeIcon active={basemap === 'dark'} />
+              <span className="sensor-name">Dark</span>
+              <span className="sensor-meta">Esri canvas + borders</span>
+            </button>
+            <button
+              type="button"
+              className="sensor-row"
+              aria-pressed={basemap === 'blue-marble'}
+              onClick={() => onBasemap('blue-marble')}
+            >
+              <EyeIcon active={basemap === 'blue-marble'} />
+              <span className="sensor-name">Blue Marble</span>
+              <span className="sensor-meta">NASA GIBS</span>
+            </button>
+          </div>
+        </section>
+
+        <section className="section">
+          <h3>Overlays (1/{presets.length})</h3>
           <div className="presets">
             {presets.map(preset => (
               <button
@@ -160,7 +411,8 @@ export function ControlPanel({
                 aria-pressed={areaId === preset.id}
                 onClick={() => onPreset(preset.id)}
               >
-                {preset.label}
+                <EyeIcon active={areaId === preset.id} />
+                <span>{preset.label}</span>
               </button>
             ))}
           </div>
@@ -175,9 +427,9 @@ export function ControlPanel({
             >
               {drawing ? 'Drag on the map…' : 'Draw a rectangle'}
             </button>
-            <span className="note" style={{margin: 0}}>
-              {areaId === 'custom' ? 'Custom box' : 'Preset'}
-            </span>
+            <a className="btn" href={csvHref} download>
+              Download CSV
+            </a>
           </div>
 
           <div className="coords">
@@ -227,48 +479,6 @@ export function ControlPanel({
             </div>
           </div>
         </section>
-
-        <section className="section">
-          <h3>Hexagon size</h3>
-          <div className="seg" role="group" aria-label="Hexagon size">
-            <button
-              type="button"
-              aria-pressed={resAuto}
-              onClick={onResAuto}
-              aria-label="Hexagon resolution follows map zoom"
-            >
-              Auto
-            </button>
-            {RES_OPTIONS.map(option => (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={!resAuto && res === option}
-                onClick={() => onRes(option)}
-                aria-label={`Hexagon resolution ${option}`}
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-          <p className="note">
-            {status === 'loading'
-              ? 'Loading hexagons…'
-              : `${formatCount(totals.cells)}${totals.truncated ? '+' : ''} hexagons at level ${res} (~${formatCount(Math.round(h3.hexArea(res, h3.UNITS.km2)))} km2 each)${resAuto ? ', following the zoom' : ''}, coloured by mean FRP (MW):`}
-          </p>
-          <div className="legend">
-            {frpStepLabels(totals.frpCuts).map((label, index) => (
-              <span className="legend-step" key={index}>
-                <span className="legend-bar" style={{background: FIRE_RAMP[index]}} />
-                <span className="legend-value">{label}</span>
-              </span>
-            ))}
-          </div>
-          <p className="note">
-            Busiest hexagon: {formatCount(totals.peak)} hotspots · Peak FRP {totals.peakFrp.toFixed(1)} MW. Click a dot for details.
-          </p>
-        </section>
-
       </div>
     </aside>
   )

@@ -23,6 +23,25 @@ export interface CellsResponse {
   truncated: boolean
 }
 
+export interface PointDetection {
+  ts: string
+  time_utc: string | null
+  lat: number
+  lon: number
+  sensor: string
+  satellite: string
+  confidence_pct: number
+  frp_mw: number
+  daynight: string
+  h3_r8: string
+}
+
+export interface PointsResponse {
+  points: PointDetection[]
+  total: number
+  truncated: boolean
+}
+
 export interface CalendarMonth {
   year: number
   month: number
@@ -90,6 +109,26 @@ export function fetchCells(
 ) {
   const query = new URLSearchParams({res: String(res), from, to, bbox: bbox.join(',')})
   return request<CellsResponse>(`${API_BASE}/cells?${query.toString()}`, undefined, signal)
+}
+
+export function fetchPoints(
+  {
+    bbox,
+    from,
+    to,
+    limit = 5000,
+    offset = 0,
+  }: {bbox: BBox; from: string; to: string; limit?: number; offset?: number},
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({
+    bbox: bbox.join(','),
+    from,
+    to,
+    limit: String(limit),
+    offset: String(offset),
+  })
+  return request<PointsResponse>(`${API_BASE}/points?${query.toString()}`, undefined, signal)
 }
 
 export function fetchCalendar(

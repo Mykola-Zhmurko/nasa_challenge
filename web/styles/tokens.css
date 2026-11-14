@@ -1,13 +1,14 @@
 :root {
-  /* Data terminal — dealt sheet, seed 1520652692 */
-  --ground: #171719;
-  --surface: #131217;
-  --raised: #212023;
-  --border: #222224;
-  --rule: #1b1a1f;
-  --control: #3a3a3e;
+  /* FIRMS dark shell — Data terminal tokens */
+  --ground: #101216;
+  --surface: #15171c;
+  --surface-alpha: rgba(21, 23, 28, 0.94);
+  --raised: #1e2128;
+  --border: #252830;
+  --rule: #1c1f26;
+  --control: #3a3e48;
   --text: #ffffff;
-  --muted: #a2a5ab;
+  --muted: #a6a9b0;
   --accent: #4a8ad6;
   --positive: #44a282;
   --negative: #e5566f;
@@ -20,23 +21,21 @@
   --fire-4: #b8321a;
   --fire-5: #7f170e;
 
-  --shadow-float: 0 12px 28px rgba(0, 0, 0, 0.28);
-
   --radius-card: 6px;
-  --radius-control: 999px;
+  --radius-control: 4px;
   --radius-chip: 4px;
-  --row-height: 42px;
-  --gap: 24px;
-  --pad: 16px;
+  --row-height: 40px;
+  --gap: 16px;
+  --pad: 14px;
   --control-height: 30px;
 
   --font: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
-  --fs-title: 16px;
+  --fs-title: 18px;
   --fs-section: 13px;
   --fs-kpi: 15px;
   --fs-body: 13px;
   --fs-small: 13px;
-  --fs-meta: 12px;
+  --fs-meta: 13px;
 }
