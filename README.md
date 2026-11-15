@@ -5,20 +5,21 @@ Team "The One" · Dnipro · 14–15 November 2026
 
 ## What it is
 
-Two satellites watch fires on Earth: **MODIS** (since 2000) and **VIIRS** (since 2012).
+Two satellites watch fires on Earth: **MODIS** (1 km, since 2001) and **VIIRS** (375 m, since 2012).
 They measure differently, so their data cannot be compared directly. This app turns both into
 **one series**, so the user never has to think about which satellite saw a fire.
 
-You pick an area, and the app shows **when fires happen there** — day by day, in a calendar —
-together with how strong they were.
+Pick an area and a period. The app shows where fires were, when they happened, and whether the
+current month is above or below the normal level.
 
 ![Fire Calendar — world view with harmonized hotspots, totals and burning calendar](docs/screenshots/full.png)
 
 ## What you can do
 
-- Pick an area: draw a rectangle on the map, type coordinates, or choose a region
-- See hotspots on a dark map, coloured by fire strength (MW)
-- Read the calendar: which days burned, which day was the peak
+- Pick an area: draw a rectangle on the map, type coordinates, or search for a city
+- See hotspots on the map, coloured by fire power (MW)
+- Read the burning calendar: year by month, then day by day, with the peak day
+- Compare the selected month with the median of the same days in earlier years
 - Download exactly what you see as a CSV file
 
 ## How two sensors become one series
@@ -26,63 +27,33 @@ together with how strong they were.
 | Step | Rule |
 | --- | --- |
 | Confidence | VIIRS "low" is dropped; "nominal" becomes 50, "high" becomes 90. MODIS below 50 is dropped |
-| Duplicates | Same 1 km cell on the same day → one record, the stronger detection wins |
-| Result | 473,000 raw rows → 291,288 clean records; 11,803 were seen by both satellites |
+| Duplicates | Same ~1 km cell on the same day → one record, the stronger detection wins |
+| Provenance | Every record keeps a note whether MODIS, VIIRS or both saw it |
 
-Each record keeps a note whether MODIS, VIIRS or both saw it.
+## Data
 
-## How it is built
-
-```
-NASA FIRMS data  →  clean + merge  →  database  →  API  →  web app
-```
-
-- **Cleaning:** Python (the same rules also written in Rust — 10× faster, 53 MB memory)
-- **Database:** DuckDB — a single file, no server, no logins
-- **API:** FastAPI with five endpoints (health, cells, points, calendar, CSV export)
-- **Web app:** React + Leaflet, no paid map service, no API keys
-- **Map:** dark Esri canvas, switchable to NASA Blue Marble; hotspots coloured by fire strength
+Fire data: **NASA FIRMS** — MODIS C6.1 and VIIRS C2 (NOAA-20), <https://firms.modaps.eosdis.nasa.gov>.
+The public download covers the last 7 days; older years need a free FIRMS API key (`FIRMS_MAP_KEY`).
+The database holds **8.7 million detections from 2001 to November 2026**; the historical years cover
+Europe, the current window is worldwide. Days without data are marked as such.
 
 ## Run it
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install pandas duckdb h3 pyarrow requests fastapi uvicorn
-.venv/bin/python -m pipeline.build
-.venv/bin/python -m uvicorn api.app:app --port 8100
-cd web && npm install && npm run dev      # open http://127.0.0.1:5173
+.venv/bin/python -m pipeline.build                              # raw CSVs → data/fires.duckdb
+.venv/bin/python -m uvicorn api.app:app --port 8100             # API
+cd web && npm install && npm run dev                            # http://127.0.0.1:5173
 ```
+
+The database file is not in this repository (210 MB) — the pipeline rebuilds it.
 
 ## Documentation
 
-Developer documentation lives in [`docs/`](docs/README.md) — start there:
-
-| Doc | Answers |
-| --- | --- |
-| [docs/README.md](docs/README.md) | reading order, one-screen system diagram, glossary, "where do I change …?" |
-| [docs/architecture.md](docs/architecture.md) | the four parts, request path, why DuckDB/H3/Leaflet, RAM budget |
-| [docs/data.md](docs/data.md) | FIRMS sources, harmonization and dedupe rules, schema, rebuild |
-| [docs/api.md](docs/api.md) | every endpoint with parameters, response shape, errors and a curl |
-| [docs/frontend.md](docs/frontend.md) | state, components, `web/lib/*`, tiles, search, calendar, URL state |
-| [docs/development.md](docs/development.md) | setup, run, tests, build + deploy, conventions, pitfalls |
-
-## Data
-
-Fire data: **NASA FIRMS** (Fire Information for Resource Management System, NASA Earthdata) — the
-resource listed in this challenge's *Resources* tab. Concretely we use **Active Fire Data** and the
-**Archive Download** (via the FIRMS area API) from https://firms.modaps.eosdis.nasa.gov. The public
-download covers the **last 7 days**; older years need a free FIRMS API key (`FIRMS_MAP_KEY` in
-`.env`). The app shows exactly what is loaded and never pretends to know more — days without data
-are marked as such.
-
-Note on sensors: Suomi-NPP stopped delivering new data, so the live window uses **NOAA-20 (J1)**;
-SNPP appears only in the historical archive.
-
-## Screenshots
-
-| Desktop | Phone |
-| --- | --- |
-| ![Desktop view](docs/screenshots/overview.png) | ![Phone view](docs/screenshots/mobile.png) |
+Developer documentation lives in [`docs/`](docs/README.md): architecture, data model, API, frontend,
+development, UI copy rules.
 
 ## Credits
 
-Fire data: NASA FIRMS / LANCE. Imagery: NASA GIBS, Esri. Design: `design-taste-frontend` + `unslop`.
+Fire data: NASA FIRMS / LANCE. Imagery: Esri, OpenStreetMap contributors. City search: Open-Meteo
+(GeoNames). Built with DuckDB, FastAPI, React and Leaflet.
