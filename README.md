@@ -12,7 +12,7 @@ They measure differently, so their data cannot be compared directly. This app tu
 Pick an area and a period. The app shows where fires were, when they happened, and whether the
 current month is above or below the normal level.
 
-![Fire Calendar — world view with harmonized hotspots, totals and burning calendar](docs/screenshots/full.png)
+![Fire Calendar — world view with harmonized hotspots, totals and the time panel](docs/screenshots/full.png)
 
 ## What you can do
 
@@ -21,6 +21,18 @@ current month is above or below the normal level.
 - Read the burning calendar: year by month, then day by day, with the peak day
 - Compare the selected month with the median of the same days in earlier years
 - Download exactly what you see as a CSV file
+
+## Only the data that is needed
+
+- **H3 cells, not single points.** Every detection gets an H3 cell (level 8, ~0.74 km²) when it is
+  imported, and the map asks for cells instead of detections: one shape per cell, carrying the number of
+  detections and the mean fire power, at a resolution that follows the zoom. A worldwide week is about
+  17,700 shapes instead of 291,000 points, and the number stays bounded however far the map is zoomed out.
+- **Polygons for areas.** The area you draw is a polygon: the server keeps only what lies inside it — an
+  exact box for the map, an H3 polygon fill for cell and calendar queries — so a query touches the cells
+  of that area, never the whole table.
+- **Detections on request only.** Individual rows are never drawn on the map; the CSV export is the one
+  place that returns them.
 
 ## How two sensors become one series
 
