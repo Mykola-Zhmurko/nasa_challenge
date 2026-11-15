@@ -12,6 +12,7 @@ import {
 import * as h3 from 'h3-js'
 import type {BBox, Cell, PointDetection, SensorTotals} from '../../lib/api'
 import {fetchCalendar, fetchPoints} from '../../lib/api'
+import {clipToArea, markerLongitudes} from '../../lib/wrap'
 import {
   FIRE_RAMP,
   formatConfidence,
@@ -23,18 +24,25 @@ import {
   frpStepLabels,
 } from '../../lib/ramp'
 import {hideNoDataTiles} from '../../lib/tiles'
+import {captureFilename, captureMapPng, downloadBlob} from '../../lib/capture'
+import type {LatLon} from '../../lib/measure'
 import {
   BLUE_MARBLE_NATIVE_ZOOM,
   BORDERS_NATIVE_ZOOM,
   DARK_NATIVE_ZOOM,
+  MAP_MAX_BOUNDS,
   MAX_ZOOM,
   MIN_ZOOM,
   SATELLITE_NATIVE_ZOOM,
   UNDERLAY_NATIVE_ZOOM,
   resForZoom,
 } from '../../lib/zoom'
+import {SmoothWheelZoom} from './SmoothWheelZoom'
 
 export type Basemap = 'satellite' | 'dark' | 'blue-marble'
+
+/** Distance along a path, or area inside a closed ring. */
+export type MeasureMode = 'distance' | 'area'
 
 export interface SensorsEnabled {
   MODIS: boolean
@@ -52,9 +60,18 @@ interface MapViewProps {
   sensorsEnabled: SensorsEnabled
   areaSensors?: SensorTotals
   drawing: boolean
+  measuring: boolean
+  measureMode: MeasureMode
+  measurePoints: LatLon[]
+  onMeasurePoint: (point: LatLon) => void
+  captureToken: number
+  captureFooter: string
+  onCaptured: (result: {ok: boolean; error?: string}) => void
   onBBox: (bbox: BBox) => void
+  onViewBBox?: (bbox: BBox) => void
   onCursor: (position: {lat: number; lon: number} | null) => void
   onZoom: (zoom: number) => void
+  onMapReady?: (map: L.Map) => void
 }
 
 const MAX_CELLS = 20000
@@ -93,6 +110,46 @@ function bboxArea(box: BBox): number {
   return Math.max(0, box[2] - box[0]) * Math.max(0, box[3] - box[1])
 }
 
+/** Rough size of several boxes together, only used to compare two sets of boxes. */
+function boxesArea(boxes: BBox[]): number {
+  return boxes.reduce((sum, box) => sum + bboxArea(box), 0)
+}
+
+/** Longitude range that is currently drawn; panning inside it needs no redraw. */
+type DrawnRange = {west: number; east: number}
+
+/** Box a draw covers: the view plus half a view width on each side, so a short pan
+ *  does not rebuild thousands of markers. */
+function drawnRange(map: L.Map): DrawnRange {
+  const bounds = map.getBounds()
+  const west = bounds.getWest()
+  const east = bounds.getEast()
+  const margin = (east - west) / 2
+  return {west: west - margin, east: east + margin}
+}
+
+function coversView(drawn: DrawnRange, map: L.Map): boolean {
+  const bounds = map.getBounds()
+  return bounds.getWest() >= drawn.west && bounds.getEast() <= drawn.east
+}
+
+/** One point can sit in two query boxes when the view touches the dateline. */
+function mergePoints(points: PointDetection[]): PointDetection[] {
+  const seen = new Set<string>()
+  const merged: PointDetection[] = []
+  for (const point of points) {
+    const key = `${point.ts}|${point.lat}|${point.lon}|${point.sensor}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(point)
+  }
+  return merged
+}
+
+/** A clicked cell or detection together with the position it was clicked at, so the popup
+ *  opens in the world copy the user actually sees. */
+type Picked<T> = {item: T; position: [number, number]}
+
 function Hotspots({
   cells,
   cuts,
@@ -100,11 +157,12 @@ function Hotspots({
 }: {
   cells: Cell[]
   cuts: number[]
-  onSelect: (cell: Cell) => void
+  onSelect: (cell: Cell, position: [number, number]) => void
 }) {
   const map = useMap()
   const group = useRef<L.LayerGroup | null>(null)
   const rendererRef = useRef<L.Canvas | null>(null)
+  const drawnRef = useRef<DrawnRange | null>(null)
   const onSelectRef = useRef(onSelect)
 
   useEffect(() => {
@@ -116,40 +174,62 @@ function Hotspots({
       group.current = L.layerGroup().addTo(map)
     }
     const layer = group.current
-    layer.clearLayers()
-    if (!cells.length) return
-
-    const visible = cells.length > MAX_CELLS ? cells.slice(0, MAX_CELLS) : cells
     const renderer = (rendererRef.current ??= L.canvas({padding: 0.4}))
-    const withTooltips = visible.length <= TOOLTIP_LIMIT
-    const maxDetections = visible.reduce((peak, cell) => Math.max(peak, cell.detections), 1)
-    const scale = Math.sqrt(maxDetections)
 
-    visible.forEach(cell => {
-      const [lat, lng] = cellCentre(cell.h3)
-      const radius = 3 + (Math.sqrt(cell.detections) / scale) * 4
-      const fillColor = frpRampColor(cell.mean_frp, cuts)
-      const marker = L.circleMarker([lat, lng], {
-        renderer,
-        radius,
-        stroke: true,
-        weight: 0.6,
-        color: 'rgba(11, 12, 14, 0.72)',
-        fillColor,
-        fillOpacity: 0.92,
+    const draw = () => {
+      layer.clearLayers()
+      if (!cells.length) return
+      const drawn = drawnRange(map)
+      drawnRef.current = drawn
+      const west = drawn.west
+      const east = drawn.east
+      const visible = cells.length > MAX_CELLS ? cells.slice(0, MAX_CELLS) : cells
+      const withTooltips = visible.length <= TOOLTIP_LIMIT
+      const maxDetections = visible.reduce((peak, cell) => Math.max(peak, cell.detections), 1)
+      const scale = Math.sqrt(maxDetections)
+
+      visible.forEach(cell => {
+        const [lat, lng] = cellCentre(cell.h3)
+        const radius = 3 + (Math.sqrt(cell.detections) / scale) * 4
+        const fillColor = frpRampColor(cell.mean_frp, cuts)
+        // One marker per world copy on screen: the map can show two copies of the same
+        // longitude at the dateline, and the fire belongs on both of them.
+        for (const lon of markerLongitudes(lng, west, east)) {
+          const marker = L.circleMarker([lat, lon], {
+            renderer,
+            radius,
+            stroke: true,
+            weight: 0.6,
+            color: 'rgba(11, 12, 14, 0.72)',
+            fillColor,
+            fillOpacity: 0.92,
+          })
+          if (withTooltips) {
+            marker.bindTooltip(
+              `${formatCount(cell.detections)} detections · ${cell.mean_frp.toFixed(1)} MW`,
+              {direction: 'top', className: 'tip', sticky: true},
+            )
+          }
+          marker.on('click', event => {
+            L.DomEvent.stopPropagation(event)
+            onSelectRef.current(cell, [lat, lon])
+          })
+          layer.addLayer(marker)
+        }
       })
-      if (withTooltips) {
-        marker.bindTooltip(
-          `${formatCount(cell.detections)} detections · ${cell.mean_frp.toFixed(1)} MW`,
-          {direction: 'top', className: 'tip', sticky: true},
-        )
-      }
-      marker.on('click', event => {
-        L.DomEvent.stopPropagation(event)
-        onSelectRef.current(cell)
-      })
-      layer.addLayer(marker)
-    })
+    }
+
+    draw()
+    // Panning only moves the copies under the view; the markers have to follow, otherwise
+    // the world copy that scrolls in stays empty. Inside the drawn range nothing changes.
+    const onMoveEnd = () => {
+      if (drawnRef.current && coversView(drawnRef.current, map)) return
+      draw()
+    }
+    map.on('moveend', onMoveEnd)
+    return () => {
+      map.off('moveend', onMoveEnd)
+    }
   }, [cells, cuts, map])
 
   useEffect(() => {
@@ -168,11 +248,12 @@ function PointDetections({
 }: {
   points: PointDetection[]
   cuts: number[]
-  onSelect: (point: PointDetection) => void
+  onSelect: (point: PointDetection, position: [number, number]) => void
 }) {
   const map = useMap()
   const group = useRef<L.LayerGroup | null>(null)
   const rendererRef = useRef<L.Canvas | null>(null)
+  const drawnRef = useRef<DrawnRange | null>(null)
   const onSelectRef = useRef(onSelect)
 
   useEffect(() => {
@@ -184,35 +265,53 @@ function PointDetections({
       group.current = L.layerGroup().addTo(map)
     }
     const layer = group.current
-    layer.clearLayers()
-    if (!points.length) return
-
     const renderer = (rendererRef.current ??= L.canvas({padding: 0.4}))
-    const withTooltips = points.length <= TOOLTIP_LIMIT
 
-    points.forEach(point => {
-      const fillColor = frpRampColor(point.frp_mw, cuts)
-      const marker = L.circleMarker([point.lat, point.lon], {
-        renderer,
-        radius: 4.5,
-        stroke: true,
-        weight: 0.7,
-        color: 'rgba(11, 12, 14, 0.8)',
-        fillColor,
-        fillOpacity: 0.94,
+    const draw = () => {
+      layer.clearLayers()
+      if (!points.length) return
+      const drawn = drawnRange(map)
+      drawnRef.current = drawn
+      const west = drawn.west
+      const east = drawn.east
+      const withTooltips = points.length <= TOOLTIP_LIMIT
+
+      points.forEach(point => {
+        const fillColor = frpRampColor(point.frp_mw, cuts)
+        for (const lon of markerLongitudes(point.lon, west, east)) {
+          const marker = L.circleMarker([point.lat, lon], {
+            renderer,
+            radius: 4.5,
+            stroke: true,
+            weight: 0.7,
+            color: 'rgba(11, 12, 14, 0.8)',
+            fillColor,
+            fillOpacity: 0.94,
+          })
+          if (withTooltips) {
+            marker.bindTooltip(
+              `${point.sensor} · ${point.frp_mw.toFixed(2)} MW · ${point.ts}`,
+              {direction: 'top', className: 'tip', sticky: true},
+            )
+          }
+          marker.on('click', event => {
+            L.DomEvent.stopPropagation(event)
+            onSelectRef.current(point, [point.lat, lon])
+          })
+          layer.addLayer(marker)
+        }
       })
-      if (withTooltips) {
-        marker.bindTooltip(
-          `${point.sensor} · ${point.frp_mw.toFixed(2)} MW · ${point.ts}`,
-          {direction: 'top', className: 'tip', sticky: true},
-        )
-      }
-      marker.on('click', event => {
-        L.DomEvent.stopPropagation(event)
-        onSelectRef.current(point)
-      })
-      layer.addLayer(marker)
-    })
+    }
+
+    draw()
+    const onMoveEnd = () => {
+      if (drawnRef.current && coversView(drawnRef.current, map)) return
+      draw()
+    }
+    map.on('moveend', onMoveEnd)
+    return () => {
+      map.off('moveend', onMoveEnd)
+    }
   }, [points, cuts, map])
 
   useEffect(() => {
@@ -224,11 +323,16 @@ function PointDetections({
   return null
 }
 
-function AreaOutline({bbox}: {bbox: BBox}) {
+function AreaOutline({bbox, active}: {bbox: BBox; active: boolean}) {
   const map = useMap()
   const layer = useRef<L.Rectangle | null>(null)
 
   useEffect(() => {
+    if (!active) {
+      layer.current?.remove()
+      layer.current = null
+      return
+    }
     const bounds = L.latLngBounds([bbox[1], bbox[0]], [bbox[3], bbox[2]])
     if (!layer.current) {
       layer.current = L.rectangle(bounds, {
@@ -240,7 +344,7 @@ function AreaOutline({bbox}: {bbox: BBox}) {
     } else {
       layer.current.setBounds(bounds)
     }
-  }, [bbox, map])
+  }, [bbox, active, map])
 
   return null
 }
@@ -308,6 +412,141 @@ function DrawRectangle({active, onDone}: {active: boolean; onDone: (bbox: BBox) 
   return null
 }
 
+function MeasureTool({
+  active,
+  mode,
+  points,
+  onAddPoint,
+}: {
+  active: boolean
+  mode: MeasureMode
+  points: LatLon[]
+  onAddPoint: (point: LatLon) => void
+}) {
+  const map = useMap()
+  const group = useRef<L.LayerGroup | null>(null)
+  const [hover, setHover] = useState<LatLon | null>(null)
+
+  useEffect(() => {
+    const layer = L.layerGroup().addTo(map)
+    group.current = layer
+    return () => {
+      layer.remove()
+      group.current = null
+    }
+  }, [map])
+
+  useEffect(() => {
+    const container = map.getContainer()
+    if (!active) return
+    container.style.cursor = 'crosshair'
+    return () => {
+      container.style.cursor = ''
+    }
+  }, [active, map])
+
+  useEffect(() => {
+    if (!active) setHover(null)
+  }, [active])
+
+  // The preview follows the pointer, so the length is visible before the click.
+  useEffect(() => {
+    const layer = group.current
+    if (!layer) return
+    layer.clearLayers()
+    if (!active) return
+
+    const closed = mode === 'area' && points.length >= 3
+    const path = hover ? [...points, hover] : points
+    const latLngs = path.map(point => [point.lat, point.lon] as [number, number])
+
+    if (closed) {
+      L.polygon(points.map(point => [point.lat, point.lon] as [number, number]), {
+        color: '#4a8ad6',
+        weight: 2,
+        fillColor: '#4a8ad6',
+        fillOpacity: 0.16,
+        interactive: false,
+      }).addTo(layer)
+    }
+
+    if (latLngs.length >= 2) {
+      L.polyline(latLngs, {
+        color: '#ffffff',
+        weight: 2,
+        opacity: 0.92,
+        interactive: false,
+      }).addTo(layer)
+    }
+
+    points.forEach(point => {
+      L.circleMarker([point.lat, point.lon], {
+        radius: 3.5,
+        weight: 1,
+        color: '#101216',
+        fillColor: '#ffffff',
+        fillOpacity: 1,
+        interactive: false,
+      }).addTo(layer)
+    })
+  }, [active, mode, points, hover])
+
+  useMapEvents({
+    click(event) {
+      if (!active) return
+      onAddPoint({lat: event.latlng.lat, lon: event.latlng.lng})
+    },
+    mousemove(event) {
+      if (!active) return
+      setHover({lat: event.latlng.lat, lon: event.latlng.lng})
+    },
+    mouseout() {
+      setHover(null)
+    },
+  })
+
+  return null
+}
+
+function CaptureRunner({
+  token,
+  footer,
+  areaBBox,
+  measure,
+  onDone,
+}: {
+  token: number
+  footer: string
+  areaBBox: BBox
+  measure: {mode: MeasureMode; points: LatLon[]}
+  onDone: (result: {ok: boolean; error?: string}) => void
+}) {
+  const map = useMap()
+  const lastToken = useRef(0)
+  const onDoneRef = useRef(onDone)
+
+  useEffect(() => {
+    onDoneRef.current = onDone
+  }, [onDone])
+
+  useEffect(() => {
+    if (token === 0 || token === lastToken.current) return
+    lastToken.current = token
+    captureMapPng(map, {footer, areaBBox, measure})
+      .then(blob => {
+        downloadBlob(blob, captureFilename(new Date().toISOString().slice(0, 10)))
+        onDoneRef.current({ok: true})
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.error('Map capture failed:', message)
+        onDoneRef.current({ok: false, error: message})
+      })
+  }, [token, map, footer, areaBBox, measure])
+
+  return null
+}
+
 function CursorReadout({onCursor}: {onCursor: (position: {lat: number; lon: number} | null) => void}) {
   useMapEvents({
     mousemove(event) {
@@ -345,7 +584,7 @@ function ZoomSync({
     let lastZoom = -1
     const report = () => {
       const z = map.getZoom()
-      // Re-rendering the whole app for every half-zoom step is what makes a fast
+      // Re-rendering the whole app for every zoom step is what makes a fast
       // gesture stutter. The app only needs the zoom band (hexagon level + the
       // switch to point detections), so report only when that band changes.
       const band = `${resForZoom(z)}|${z >= 8 ? 'points' : 'cells'}`
@@ -361,9 +600,11 @@ function ZoomSync({
       // stalls the animation.
       if (zoomChanged && !bandChanged) return
       const b = map.getBounds()
-      const w = Math.max(-180, Math.min(180, b.getWest()))
+      // Longitudes stay unwrapped on purpose: a view that reaches past the dateline reports
+      // 176…184 instead of being cut at 180, which is what loads the fires on the other side.
+      const w = b.getWest()
       const s = Math.max(-90, Math.min(90, b.getSouth()))
-      const e = Math.max(-180, Math.min(180, b.getEast()))
+      const e = b.getEast()
       const n = Math.max(-90, Math.min(90, b.getNorth()))
       if (w < e && s < n) {
         const next: BBox = [w, s, e, n]
@@ -419,6 +660,14 @@ function ZoomSync({
   return null
 }
 
+function MapHandle({onMapReady}: {onMapReady?: (map: L.Map) => void}) {
+  const map = useMap()
+  useEffect(() => {
+    onMapReady?.(map)
+  }, [map, onMapReady])
+  return null
+}
+
 export function MapView({
   cells,
   bbox,
@@ -430,15 +679,29 @@ export function MapView({
   sensorsEnabled,
   areaSensors,
   drawing,
+  measuring,
+  measureMode,
+  measurePoints,
+  onMeasurePoint,
+  captureToken,
+  captureFooter,
+  onCaptured,
   onBBox,
+  onViewBBox,
   onCursor,
   onZoom,
+  onMapReady,
 }: MapViewProps) {
-  const [selectedCell, setSelectedCell] = useState<Cell | null>(null)
+  const [selectedCell, setSelectedCell] = useState<Picked<Cell> | null>(null)
   const [cellSensors, setCellSensors] = useState<SensorTotals | null>(null)
-  const [selectedPoint, setSelectedPoint] = useState<PointDetection | null>(null)
+  const [selectedPoint, setSelectedPoint] = useState<Picked<PointDetection> | null>(null)
   const [points, setPoints] = useState<PointDetection[]>([])
   const [viewBBox, setViewBBox] = useState<BBox | null>(null)
+
+  const handleViewBBox = (next: BBox) => {
+    setViewBBox(next)
+    onViewBBox?.(next)
+  }
 
   const bothSensors = sensorsEnabled.MODIS && sensorsEnabled.VIIRS
   const noSensors = !sensorsEnabled.MODIS && !sensorsEnabled.VIIRS
@@ -446,21 +709,19 @@ export function MapView({
   const showPoints = zoom >= 8 || (cells.length > 0 && cells.length <= FEW_CELLS_THRESHOLD)
   const needPointsFetch = !noSensors && (showPoints || singleSensor)
 
-  const effectivePointsBBox = useMemo<BBox>(() => {
-    if (!viewBBox || zoom < 8) return bbox
-    const minLon = Math.max(bbox[0], viewBBox[0])
-    const minLat = Math.max(bbox[1], viewBBox[1])
-    const maxLon = Math.min(bbox[2], viewBBox[2])
-    const maxLat = Math.min(bbox[3], viewBBox[3])
-    if (minLon < maxLon && minLat < maxLat) {
-      return [minLon, minLat, maxLon, maxLat]
-    }
-    return bbox
+  // A view that crosses the dateline needs two queries, one per side; everything else is one.
+  const effectivePointsBoxes = useMemo<BBox[]>(() => {
+    if (!viewBBox || zoom < 8) return [bbox]
+    const boxes = clipToArea(bbox, viewBBox)
+    return boxes.length ? boxes : [bbox]
   }, [bbox, viewBBox, zoom])
 
-  const pointsQueryRef = useRef<{bbox: BBox; from: string; to: string; limit: number} | null>(
-    null,
-  )
+  const pointsQueryRef = useRef<{
+    boxes: BBox[]
+    from: string
+    to: string
+    limit: number
+  } | null>(null)
 
   useEffect(() => {
     if (!needPointsFetch) {
@@ -473,7 +734,7 @@ export function MapView({
       setSelectedCell(null)
     }
     const limit = singleSensor && !showPoints ? 20000 : 5000
-    // Panning and half-level zoom steps only shift the view inside the area that is
+    // Panning and zoom steps only shift the view inside the area that is
     // already loaded; refetching there would rebuild thousands of markers for
     // nothing. Fetch again only when the view leaves the loaded area or gets small
     // enough that a denser query actually shows more fires.
@@ -483,26 +744,27 @@ export function MapView({
       previous.from === rangeFrom &&
       previous.to === rangeTo &&
       previous.limit === limit &&
-      bboxCovers(previous.bbox, effectivePointsBBox) &&
-      bboxArea(effectivePointsBBox) > bboxArea(previous.bbox) * 0.4
+      effectivePointsBoxes.every(box => previous.boxes.some(outer => bboxCovers(outer, box))) &&
+      boxesArea(effectivePointsBoxes) > boxesArea(previous.boxes) * 0.4
     if (reusable) return
     pointsQueryRef.current = {
-      bbox: effectivePointsBBox,
+      boxes: effectivePointsBoxes,
       from: rangeFrom,
       to: rangeTo,
       limit,
     }
     const controller = new AbortController()
-    fetchPoints(
-      {bbox: effectivePointsBBox, from: rangeFrom, to: rangeTo, limit, offset: 0},
-      controller.signal,
-    ).then(result => {
-      if (result.status === 'ok' && result.data) {
-        setPoints(result.data.points)
+    Promise.all(
+      effectivePointsBoxes.map(box =>
+        fetchPoints({bbox: box, from: rangeFrom, to: rangeTo, limit, offset: 0}, controller.signal),
+      ),
+    ).then(results => {
+      if (results.every(result => result.status === 'ok' && result.data)) {
+        setPoints(mergePoints(results.flatMap(result => result.data?.points ?? [])))
       }
     })
     return () => controller.abort()
-  }, [needPointsFetch, showPoints, singleSensor, effectivePointsBBox, rangeFrom, rangeTo])
+  }, [needPointsFetch, showPoints, singleSensor, effectivePointsBoxes, rangeFrom, rangeTo])
 
   const filteredPoints = useMemo(() => {
     if (noSensors) return []
@@ -559,7 +821,7 @@ export function MapView({
     const controller = new AbortController()
     setCellSensors(null)
     fetchCalendar(
-      {h3_cells: [selectedCell.h3], from: rangeFrom, to: rangeTo, res},
+      {h3_cells: [selectedCell.item.h3], from: rangeFrom, to: rangeTo, res},
       controller.signal,
     ).then(result => {
       if (result.status === 'ok' && result.data?.totals.sensors) {
@@ -569,30 +831,24 @@ export function MapView({
     return () => controller.abort()
   }, [selectedCell, rangeFrom, rangeTo, res])
 
-  const selectedPos = useMemo<[number, number] | null>(() => {
-    if (!selectedCell) return null
-    const [lat = 0, lng = 0] = h3.h3ToGeo(selectedCell.h3)
-    return [lat, lng]
-  }, [selectedCell])
-
   const selectedAreaKm2 = useMemo(() => {
     if (!selectedCell) return 0
-    return Math.round(h3.cellArea(selectedCell.h3, h3.UNITS.km2))
+    return Math.round(h3.cellArea(selectedCell.item.h3, h3.UNITS.km2))
   }, [selectedCell])
 
   const sensorsToShow = cellSensors ?? areaSensors
 
   return (
-    <div className="map" data-basemap={basemap}>
+    <div className={measuring ? 'map measuring' : 'map'} data-basemap={basemap}>
       <MapContainer
         center={[18, 8]}
         zoom={2}
         minZoom={MIN_ZOOM}
         maxZoom={MAX_ZOOM}
-        zoomSnap={0.5}
-        zoomDelta={0.5}
-        wheelPxPerZoomLevel={120}
-        wheelDebounceTime={40}
+        zoomSnap={1}
+        zoomDelta={1}
+        maxBounds={MAP_MAX_BOUNDS}
+        maxBoundsViscosity={1}
         worldCopyJump
         preferCanvas
         attributionControl={false}
@@ -601,25 +857,29 @@ export function MapView({
         {basemap === 'satellite' && (
           <TileLayer
             key="under-dark"
-            url="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+            className="under-osm"
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            crossOrigin="anonymous"
             maxZoom={MAX_ZOOM}
             maxNativeZoom={UNDERLAY_NATIVE_ZOOM}
             updateWhenZooming={false}
             keepBuffer={1}
             zIndex={0}
-            attribution="OpenStreetMap contributors, CARTO"
+            attribution="OpenStreetMap contributors"
           />
         )}
         {basemap === 'blue-marble' && (
           <TileLayer
             key="under-dark-marble"
-            url="https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+            className="under-osm"
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            crossOrigin="anonymous"
             maxZoom={MAX_ZOOM}
             maxNativeZoom={UNDERLAY_NATIVE_ZOOM}
             updateWhenZooming={false}
             keepBuffer={1}
             zIndex={0}
-            attribution="OpenStreetMap contributors, CARTO"
+            attribution="OpenStreetMap contributors"
           />
         )}
         {basemap === 'satellite' && (
@@ -644,6 +904,7 @@ export function MapView({
             maxNativeZoom={DARK_NATIVE_ZOOM}
             updateWhenZooming={false}
             keepBuffer={1}
+            crossOrigin="anonymous"
             attribution="Esri, HERE, Garmin, OpenStreetMap contributors"
           />
         )}
@@ -667,42 +928,39 @@ export function MapView({
           maxZoom={MAX_ZOOM}
           maxNativeZoom={BORDERS_NATIVE_ZOOM}
           opacity={0.55}
+          crossOrigin="anonymous"
           zIndex={2}
         />
         {!showPoints && (
           <Hotspots
             cells={visibleCells}
             cuts={cuts}
-            onSelect={setSelectedCell}
+            onSelect={(cell, position) => setSelectedCell({item: cell, position})}
           />
         )}
         {showPoints && (
           <PointDetections
             points={filteredPoints}
             cuts={cuts}
-            onSelect={setSelectedPoint}
+            onSelect={(point, position) => setSelectedPoint({item: point, position})}
           />
         )}
-        {!showPoints && selectedCell && selectedPos && (
+        {!showPoints && selectedCell && (
           <Popup
-            position={selectedPos}
+            position={selectedCell.position}
             eventHandlers={{remove: () => setSelectedCell(null)}}
           >
             <div className="cell-popup">
               <div className="popup-row">
-                <span>Cell ID</span>
-                <b className="num">{selectedCell.h3}</b>
-              </div>
-              <div className="popup-row">
                 <span>Detections</span>
-                <b className="num">{formatCount(selectedCell.detections)}</b>
+                <b className="num">{formatCount(selectedCell.item.detections)}</b>
               </div>
               <div className="popup-row">
-                <span>Mean FRP</span>
-                <b className="num">{selectedCell.mean_frp.toFixed(1)} MW</b>
+                <span>Mean fire power</span>
+                <b className="num">{selectedCell.item.mean_frp.toFixed(1)} MW</b>
               </div>
               <div className="popup-row">
-                <span>Hexagon area (km²)</span>
+                <span>Area (km²)</span>
                 <b className="num">{formatCount(selectedAreaKm2)} km²</b>
               </div>
               {sensorsToShow && (
@@ -718,56 +976,71 @@ export function MapView({
         )}
         {showPoints && selectedPoint && (
           <Popup
-            position={[selectedPoint.lat, selectedPoint.lon]}
+            position={selectedPoint.position}
             eventHandlers={{remove: () => setSelectedPoint(null)}}
           >
             <div className="cell-popup">
               <div className="popup-row">
                 <span>Latitude</span>
-                <b className="num">{selectedPoint.lat.toFixed(5)}</b>
+                <b className="num">{selectedPoint.item.lat.toFixed(5)}</b>
               </div>
               <div className="popup-row">
                 <span>Longitude</span>
-                <b className="num">{selectedPoint.lon.toFixed(5)}</b>
+                <b className="num">{selectedPoint.item.lon.toFixed(5)}</b>
               </div>
               <div className="popup-row">
-                <span>Acquisition date</span>
-                <b className="num">{selectedPoint.ts}</b>
+                <span>Date</span>
+                <b className="num">{selectedPoint.item.ts}</b>
               </div>
               <div className="popup-row">
-                <span>Acquisition time (UTC)</span>
-                <b className="num">{selectedPoint.time_utc ?? 'Daily (no UTC time)'}</b>
+                <span>Time (UTC)</span>
+                <b className="num">{selectedPoint.item.time_utc ?? '—'}</b>
               </div>
               <div className="popup-row">
                 <span>Confidence</span>
                 <b className="num">
-                  {formatConfidence(selectedPoint.sensor, selectedPoint.confidence_pct)}
+                  {formatConfidence(selectedPoint.item.sensor, selectedPoint.item.confidence_pct)}
                 </b>
               </div>
               <div className="popup-row">
-                <span>FRP (MW)</span>
-                <b className="num">{selectedPoint.frp_mw.toFixed(2)} MW</b>
+                <span>Fire power (MW)</span>
+                <b className="num">{selectedPoint.item.frp_mw.toFixed(2)} MW</b>
               </div>
               <div className="popup-row">
                 <span>Sensor</span>
-                <b className="num">{selectedPoint.sensor}</b>
+                <b className="num">{selectedPoint.item.sensor}</b>
               </div>
               <div className="popup-row">
                 <span>Satellite</span>
-                <b className="num">{formatSatellite(selectedPoint.satellite)}</b>
+                <b className="num">{formatSatellite(selectedPoint.item.satellite)}</b>
               </div>
               <div className="popup-row">
                 <span>Day/Night</span>
-                <b className="num">{formatDayNight(selectedPoint.daynight)}</b>
+                <b className="num">{formatDayNight(selectedPoint.item.daynight)}</b>
               </div>
             </div>
           </Popup>
         )}
-        <AreaOutline bbox={bbox} />
+        <AreaOutline bbox={bbox} active={drawing && !measuring} />
         <FitToArea bbox={bbox} />
-        <DrawRectangle active={drawing} onDone={onBBox} />
+        <DrawRectangle active={drawing && !measuring} onDone={onBBox} />
+        <MeasureTool
+          active={measuring}
+          mode={measureMode}
+          points={measurePoints}
+          onAddPoint={onMeasurePoint}
+        />
+        <CaptureRunner
+          token={captureToken}
+          footer={captureFooter}
+          areaBBox={bbox}
+          measure={{mode: measureMode, points: measurePoints}}
+          onDone={onCaptured}
+        />
         <CursorReadout onCursor={onCursor} />
-        <ZoomSync onZoom={onZoom} onViewBBox={setViewBBox} />
+        <ZoomSync onZoom={onZoom} onViewBBox={handleViewBBox} />
+        <MapHandle onMapReady={onMapReady} />
+        <SmoothWheelZoom />
         <ScaleControl position="bottomleft" imperial metric maxWidth={150} />
         <AttributionControl position="bottomleft" prefix={false} />
       </MapContainer>
@@ -781,11 +1054,6 @@ export function MapView({
               <span className="legend-value">{label}</span>
             </span>
           ))}
-        </div>
-        <div className="map-legend-sub">
-          {showPoints
-            ? `Colour encodes detection FRP (MW) · ${formatCount(filteredPoints.length)} detections`
-            : `Colour encodes mean FRP (MW) · ${formatCount(visibleCells.length)} H3 cells, size = detections`}
         </div>
       </div>
 
