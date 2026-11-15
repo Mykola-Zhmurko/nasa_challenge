@@ -13,6 +13,9 @@
   --positive: #44a282;
   --negative: #e5566f;
   --warning: #d9a441;
+  /* Active filter: pressed range preset, both ends of a picked date range */
+  --select: #b8321a;
+  --select-soft: rgba(184, 50, 26, 0.34);
 
   /* Accessible Viridis colour-blind-safe sequential ramp */
   --fire-1: #440154;

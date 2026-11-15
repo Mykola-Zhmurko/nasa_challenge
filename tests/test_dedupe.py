@@ -96,3 +96,25 @@ def test_different_days_in_same_cell_stay_separate():
     assert len(out) == 2
     assert list(out["ts"]) == [date(2026, 11, 10), date(2026, 11, 11)]
     assert list(out["sources"]) == [1, 2]
+
+
+def test_sources_bitmask_with_unrecognised_sensor_zero_one_two_yields_three():
+    cell = 613200000000000042
+    d = date(2026, 11, 12)
+    df = pd.DataFrame(
+        {
+            "h3_r8": [cell, cell, cell],
+            "ts": [d, d, d],
+            "sensor": ["UNKNOWN", "MODIS", "VIIRS"],
+            "satellite": ["U", "T", "N"],
+            "lat": [43.0, 43.0, 43.0],
+            "lon": [15.0, 15.0, 15.0],
+            "confidence_pct": [95, 80, 85],
+            "frp_mw": [10.0, 20.0, 30.0],
+            "daynight": ["D", "D", "N"],
+        }
+    )
+    out = dedupe_dataframe(df)
+    assert len(out) == 1
+    assert out.iloc[0]["sources"] == 3
+

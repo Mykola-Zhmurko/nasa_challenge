@@ -19,7 +19,7 @@ import {
   formatCount,
   formatDayNight,
   formatSatellite,
-  frpCuts,
+  FRP_CUTS,
   frpRampColor,
   frpStepLabels,
 } from '../../lib/ramp'
@@ -705,9 +705,8 @@ export function MapView({
 
   const bothSensors = sensorsEnabled.MODIS && sensorsEnabled.VIIRS
   const noSensors = !sensorsEnabled.MODIS && !sensorsEnabled.VIIRS
-  const singleSensor = !bothSensors && !noSensors
   const showPoints = zoom >= 8 || (cells.length > 0 && cells.length <= FEW_CELLS_THRESHOLD)
-  const needPointsFetch = !noSensors && (showPoints || singleSensor)
+  const needPointsFetch = !noSensors && showPoints
 
   // A view that crosses the dateline needs two queries, one per side; everything else is one.
   const effectivePointsBoxes = useMemo<BBox[]>(() => {
@@ -733,7 +732,7 @@ export function MapView({
     if (showPoints) {
       setSelectedCell(null)
     }
-    const limit = singleSensor && !showPoints ? 20000 : 5000
+    const limit = 5000
     // Panning and zoom steps only shift the view inside the area that is
     // already loaded; refetching there would rebuild thousands of markers for
     // nothing. Fetch again only when the view leaves the loaded area or gets small
@@ -764,7 +763,7 @@ export function MapView({
       }
     })
     return () => controller.abort()
-  }, [needPointsFetch, showPoints, singleSensor, effectivePointsBoxes, rangeFrom, rangeTo])
+  }, [needPointsFetch, showPoints, effectivePointsBoxes, rangeFrom, rangeTo])
 
   const filteredPoints = useMemo(() => {
     if (noSensors) return []
@@ -779,39 +778,11 @@ export function MapView({
 
   const visibleCells = useMemo<Cell[]>(() => {
     if (noSensors) return []
-    if (bothSensors) return cells
-    if (!filteredPoints.length) return []
-    const parentRes = Math.min(res, 8)
-    const buckets = new Map<string, {detections: number; frpSum: number}>()
-    for (const point of filteredPoints) {
-      const h3Cell =
-        parentRes === 8 ? point.h3_r8 : h3.h3ToParent(point.h3_r8, parentRes)
-      if (!h3Cell) continue
-      const existing = buckets.get(h3Cell)
-      if (existing) {
-        existing.detections += 1
-        existing.frpSum += point.frp_mw
-      } else {
-        buckets.set(h3Cell, {detections: 1, frpSum: point.frp_mw})
-      }
-    }
-    return Array.from(buckets.entries())
-      .map(([h3Id, item]) => ({
-        h3: h3Id,
-        detections: item.detections,
-        mean_frp: Math.round((item.frpSum / item.detections) * 100) / 100,
-      }))
-      .sort((a, b) => b.detections - a.detections)
-  }, [noSensors, bothSensors, cells, filteredPoints, res])
+    return cells
+  }, [noSensors, cells])
 
-  const cuts = useMemo(() => {
-    if (showPoints && filteredPoints.length > 0) {
-      return frpCuts(filteredPoints.map(p => ({mean_frp: p.frp_mw})))
-    }
-    return frpCuts(visibleCells)
-  }, [showPoints, filteredPoints, visibleCells])
-
-  const labels = useMemo(() => frpStepLabels(cuts), [cuts])
+  const cuts = FRP_CUTS
+  const labels = frpStepLabels()
 
   useEffect(() => {
     if (!selectedCell) {
@@ -833,7 +804,7 @@ export function MapView({
 
   const selectedAreaKm2 = useMemo(() => {
     if (!selectedCell) return 0
-    return Math.round(h3.cellArea(selectedCell.item.h3, h3.UNITS.km2))
+    return Math.round(h3.cellArea(selectedCell.item.h3, 'km2'))
   }, [selectedCell])
 
   const sensorsToShow = cellSensors ?? areaSensors

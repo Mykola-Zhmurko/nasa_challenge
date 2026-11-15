@@ -1,8 +1,7 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
-import type {CalendarClimatology, CalendarDay, CalendarMonth} from '../../lib/api'
-import {dayNumber, daysInMonth, formatCompact, formatCount, monthFull, monthShort} from '../../lib/ramp'
+import type {CalendarClimatology, CalendarMonth} from '../../lib/api'
+import {formatCompact, formatCount, monthFull, monthShort} from '../../lib/ramp'
 import {
-  currentMonthWindow,
   monthlySeries,
   otherYear,
   seriesTotal,
@@ -30,10 +29,8 @@ const REFERENCE = 'var(--muted)'
 
 interface TrendProps {
   months: CalendarMonth[]
-  days: CalendarDay[]
   climatology: CalendarClimatology[]
   year: number
-  selected: string | null
   yearsLoaded: number
   yearsExpected: number
 }
@@ -203,7 +200,7 @@ function YearBars({
   return (
     <div ref={plot.ref} className="trend-plot">
       {!loaded ? (
-        <EmptyPlot message={`No monthly data loaded for ${year}.`} />
+        <EmptyPlot message={`No monthly data for ${year}.`} />
       ) : (
         <svg
           viewBox={`0 0 ${plot.w} ${PLOT_HEIGHT}`}
@@ -289,7 +286,7 @@ function YearLine({
   return (
     <div ref={plot.ref} className="trend-plot">
       {!loaded ? (
-        <EmptyPlot message={`No monthly data loaded for ${year}.`} />
+        <EmptyPlot message={`No monthly data for ${year}.`} />
       ) : (
         <svg
           viewBox={`0 0 ${plot.w} ${PLOT_HEIGHT}`}
@@ -324,78 +321,6 @@ function YearLine({
             <circle cx={plot.x(hovered - 1)} cy={plot.y(hoveredValue)} r={4} fill={LINE_ACTIVE} />
           ) : null}
           <HitColumns padL={plot.padL} band={plot.band} onHover={onHover} year={year} series={series} />
-        </svg>
-      )}
-    </div>
-  )
-}
-
-/** Daily hotspots of the current month, its peak day (else the picked day) marked. */
-function DailyTrend({
-  days,
-  year,
-  month,
-  selected,
-}: {
-  days: CalendarDay[]
-  year: number
-  month: number
-  selected: string | null
-}) {
-  const [ref, width] = useWidth()
-  const prefix = `${year}-${String(month).padStart(2, '0')}-`
-  const rows = useMemo(() => {
-    const byDate = new Map(days.map(day => [day.date, day.detections]))
-    return Array.from({length: daysInMonth(year, month)}, (_, index) => {
-      const date = `${prefix}${String(index + 1).padStart(2, '0')}`
-      return {date, detections: byDate.get(date) ?? null}
-    })
-  }, [days, year, month, prefix])
-
-  const known = rows.filter(row => row.detections !== null)
-  const peak = known.reduce((best, row) => Math.max(best, row.detections ?? 0), 0)
-  const peakDate = known.find(row => row.detections === peak)?.date ?? null
-  const selectedDate = selected && selected.startsWith(prefix) ? selected : null
-  const marked = selectedDate ?? peakDate
-
-  const w = Math.max(240, width)
-  const ticks = axisTicks(peak, 3)
-  const top = ticks[ticks.length - 1] ?? 1
-  const padL = 8 + Math.max(...ticks.map(tick => formatCompact(tick).length)) * 7
-  const band = (w - padL) / Math.max(1, rows.length)
-  const barWidth = Math.max(3, Math.min(26, band * 0.62))
-  const x = (index: number) => padL + band * index + band / 2
-  const y = (value: number) => PAD_TOP + (PLOT_HEIGHT - PAD_TOP - PAD_BOTTOM) * (1 - value / top)
-  const labels = rows.map(row => row.date.slice(8, 10))
-  const step = labelStep(rows.length, w - padL)
-
-  return (
-    <div ref={ref} className="trend-plot">
-      {known.length === 0 ? (
-        <EmptyPlot message={`No daily data loaded for ${monthShort(month)} ${year}.`} />
-      ) : (
-        <svg
-          viewBox={`0 0 ${w} ${PLOT_HEIGHT}`}
-          width="100%"
-          height={PLOT_HEIGHT}
-          role="img"
-          aria-label={`Daily hotspots in ${monthShort(month)} ${year}; peak ${formatCount(peak)}`}
-        >
-          <Axes ticks={ticks} y={y} x={x} labels={labels} step={step} padL={padL} width={w} />
-          {rows.map((row, index) =>
-            row.detections === null ? null : (
-              <rect
-                key={row.date}
-                x={x(index) - barWidth / 2}
-                y={y(row.detections)}
-                width={barWidth}
-                height={Math.max(0, y(0) - y(row.detections))}
-                fill={row.date === marked ? BAR_ACTIVE : BAR_MUTED}
-              >
-                <title>{`${row.date}: ${formatCount(row.detections)} hotspots`}</title>
-              </rect>
-            ),
-          )}
         </svg>
       )}
     </div>
@@ -442,9 +367,9 @@ function YearPick({
 
 function yearNote(series: MonthSeries, year: number): string {
   const {total, months} = seriesTotal(series)
-  if (months === 0) return `No monthly data loaded for ${year}.`
+  if (months === 0) return `No monthly data for ${year}.`
   if (months === 12) return `${formatCount(total)} hotspots in ${year}`
-  return `${formatCount(total)} hotspots in ${year} · ${months} of 12 months loaded`
+  return `${formatCount(total)} hotspots in ${year} · ${months} of 12 months with data`
 }
 
 function monthNote(month: number, year: number, value: number | null): string {
@@ -453,7 +378,7 @@ function monthNote(month: number, year: number, value: number | null): string {
     : `${monthFull(month)} ${year} — ${formatCount(value)} hotspots`
 }
 
-export function TrendCharts({months, days, climatology, year, selected, yearsLoaded, yearsExpected}: TrendProps) {
+export function TrendCharts({months, climatology, year, yearsLoaded, yearsExpected}: TrendProps) {
   const years = useMemo(() => yearsOnRecord(months, year), [months, year])
   const yearsKey = years.join(',')
   const [yearA, setYearA] = useState(year)
@@ -481,20 +406,6 @@ export function TrendCharts({months, days, climatology, year, selected, yearsLoa
   const ticks = axisTicks(peak, 3)
   const top = ticks[ticks.length - 1] ?? 1
 
-  const todayIso = new Date().toISOString().slice(0, 10)
-  const todayYear = Number(todayIso.slice(0, 4))
-  const todayMonth = Number(todayIso.slice(5, 7))
-  const daily = useMemo(() => currentMonthWindow(days, todayIso), [days, todayIso])
-  const dailyPrefix = `${daily.year}-${String(daily.month).padStart(2, '0')}-`
-  const dailyRows = days.filter(day => day.date.startsWith(dailyPrefix))
-  const dailyPeak = dailyRows.reduce<CalendarDay | null>(
-    (best, day) => (!best || day.detections > best.detections ? day : best),
-    null,
-  )
-  const dailyNote = daily.current
-    ? `current month · ${dailyRows.length} of ${daysInMonth(daily.year, daily.month)} days loaded`
-    : `no data for ${monthShort(todayMonth)} ${todayYear} · showing ${monthShort(daily.month)} ${daily.year}`
-
   const readoutA =
     hoverMonth === null ? yearNote(seriesA, yearA) : monthNote(hoverMonth, yearA, seriesA[hoverMonth - 1] ?? null)
   const readoutB =
@@ -511,8 +422,7 @@ export function TrendCharts({months, days, climatology, year, selected, yearsLoa
       <div className="cal-head">
         <h2>Trends</h2>
         <span className="range">
-          {partial ? `${yearsLoaded} of ${yearsExpected} years loaded` : `${yearsLoaded} years loaded`} · one year per
-          chart, hover a month for the exact count
+          {partial ? `${yearsLoaded} of ${yearsExpected} years with data` : `${yearsLoaded} years`}
         </span>
       </div>
 
@@ -539,7 +449,7 @@ export function TrendCharts({months, days, climatology, year, selected, yearsLoa
           <figcaption>
             <h3>Season curve</h3>
             <YearPick years={years} value={yearB} onChange={setYearB} label="Second year to compare" />
-            <Legend dashed="median of loaded years" />
+            <Legend dashed="median of all years" />
           </figcaption>
           <YearLine
             year={yearB}
@@ -552,21 +462,6 @@ export function TrendCharts({months, days, climatology, year, selected, yearsLoa
           />
           <p className="trend-readout" data-live={hoverMonth !== null ? 'true' : 'false'} aria-live="polite">
             {readoutB}
-          </p>
-        </figure>
-
-        <figure className="trend-card">
-          <figcaption>
-            <h3>
-              Daily, {monthShort(daily.month)} {daily.year}
-            </h3>
-            <span className="range">{dailyNote}</span>
-          </figcaption>
-          <DailyTrend days={days} year={daily.year} month={daily.month} selected={selected} />
-          <p className="trend-readout">
-            {dailyPeak
-              ? `peak ${dayNumber(dailyPeak.date)} ${monthShort(daily.month)} · ${formatCount(dailyPeak.detections)} hotspots`
-              : 'no day loaded for this month'}
           </p>
         </figure>
       </div>

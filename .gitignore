@@ -23,3 +23,7 @@ data/*.parquet
 data/history/
 data/fires_rs.csv
 *.log
+
+# generated database (rebuilt by pipeline/build.py; 210 MB)
+data/*.duckdb
+data/*.duckdb.wal

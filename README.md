@@ -39,7 +39,7 @@ NASA FIRMS data  →  clean + merge  →  database  →  API  →  web app
 
 - **Cleaning:** Python (the same rules also written in Rust — 10× faster, 53 MB memory)
 - **Database:** DuckDB — a single file, no server, no logins
-- **API:** FastAPI with four endpoints (health, cells, calendar, CSV export)
+- **API:** FastAPI with five endpoints (health, cells, points, calendar, CSV export)
 - **Web app:** React + Leaflet, no paid map service, no API keys
 - **Map:** dark Esri canvas, switchable to NASA Blue Marble; hotspots coloured by fire strength
 
@@ -51,6 +51,19 @@ python3 -m venv .venv && .venv/bin/pip install pandas duckdb h3 pyarrow requests
 .venv/bin/python -m uvicorn api.app:app --port 8100
 cd web && npm install && npm run dev      # open http://127.0.0.1:5173
 ```
+
+## Documentation
+
+Developer documentation lives in [`docs/`](docs/README.md) — start there:
+
+| Doc | Answers |
+| --- | --- |
+| [docs/README.md](docs/README.md) | reading order, one-screen system diagram, glossary, "where do I change …?" |
+| [docs/architecture.md](docs/architecture.md) | the four parts, request path, why DuckDB/H3/Leaflet, RAM budget |
+| [docs/data.md](docs/data.md) | FIRMS sources, harmonization and dedupe rules, schema, rebuild |
+| [docs/api.md](docs/api.md) | every endpoint with parameters, response shape, errors and a curl |
+| [docs/frontend.md](docs/frontend.md) | state, components, `web/lib/*`, tiles, search, calendar, URL state |
+| [docs/development.md](docs/development.md) | setup, run, tests, build + deploy, conventions, pitfalls |
 
 ## Data
 

@@ -68,21 +68,18 @@ export function CalendarSheet({
 
   const minYear = years.length ? Math.min(...years) : defaultYear
   const maxYear = years.length ? Math.max(...years) : defaultYear
-  const yearSpanLabel = minYear < maxYear ? `${minYear}-${maxYear}` : `2001-${maxYear}`
   const yearsExpected = Math.max(1, maxYear - 2001 + 1)
+  const yearSpanLabel =
+    years.length > 1 && years.length < yearsExpected
+      ? `${years.length} of ${yearsExpected} years`
+      : minYear < maxYear
+        ? `${minYear}-${maxYear}`
+        : `2001-${maxYear}`
 
   const byDate = useMemo(() => new Map(days.map(day => [day.date, day.detections])), [days])
   const byMonth = useMemo(
     () => new Map(months.map(item => [`${item.year}-${item.month}`, item.detections])),
     [months],
-  )
-  const climByMonth = useMemo(
-    () => new Map(climatology.map(item => [item.month, item.median_detections])),
-    [climatology],
-  )
-  const anomalyByYm = useMemo(
-    () => new Map(anomaly.map(item => [`${item.year}-${item.month}`, item.ratio])),
-    [anomaly],
   )
 
   const monthDays = useMemo(() => {
@@ -96,11 +93,6 @@ export function CalendarSheet({
   const todayIso = new Date().toISOString().slice(0, 10)
   const lead = firstWeekday(year, month)
   const length = daysInMonth(year, month)
-
-  const medianForMonth = climByMonth.get(month) ?? monthTotal
-  const ratioForMonth =
-    anomalyByYm.get(`${year}-${month}`) ??
-    (medianForMonth > 0 ? Math.round((monthTotal / medianForMonth) * 100) / 100 : 0)
 
   const peakDay = monthDays.reduce<CalendarDay | null>(
     (best, day) => (!best || day.detections > best.detections ? day : best),
@@ -136,10 +128,8 @@ export function CalendarSheet({
       <div className="calendar-grid-wrap">
         <div>
           <div className="cal-head">
-            <h2>Annual × monthly heatmap</h2>
-            <span className="range">
-              Rows = years, columns = months · click a cell to inspect
-            </span>
+            <h2>Hotspots by year and month</h2>
+            <span className="range">Click a month to inspect it</span>
           </div>
 
           <div className="multiyear-wrap" role="region" aria-label="Multi-year monthly burning heatmap">
@@ -158,8 +148,6 @@ export function CalendarSheet({
                   {MONTH_NUMS.map(m => {
                     const key = `${y}-${m}`
                     const count = byMonth.get(key)
-                    const ratio = anomalyByYm.get(key)
-                    const med = climByMonth.get(m)
                     const isFocused = y === year && m === month
                     return (
                       <button
@@ -168,7 +156,13 @@ export function CalendarSheet({
                         className="mcell"
                         data-on={count ? 'true' : 'false'}
                         aria-current={isFocused ? 'true' : undefined}
-                        onClick={() => setFocusedYm({year: y, month: m})}
+                        onClick={() => {
+                          // A picked day pins the sheet to that day's month. Inspecting another
+                          // month therefore has to drop the day filter first, otherwise every
+                          // cell in the matrix is dead once a single day is selected.
+                          if (selected) onSelect(null)
+                          setFocusedYm({year: y, month: m})
+                        }}
                         style={
                           count
                             ? {
@@ -179,7 +173,7 @@ export function CalendarSheet({
                         }
                         title={
                           count
-                            ? `${monthFull(m)} ${y}: ${formatCount(count)} hotspots (${(ratio ?? 1).toFixed(1)}x median ${formatCount(Math.round(med ?? count))})`
+                            ? `${monthFull(m)} ${y}: ${formatCount(count)} hotspots`
                             : `${monthFull(m)} ${y}: no detections`
                         }
                       >
@@ -192,30 +186,14 @@ export function CalendarSheet({
             </div>
           </div>
 
-          <div className="scale" aria-label="Viridis colour ramp legend">
-            <span className="scale-label">Fewer</span>
+          <div className="scale" aria-label="Colour ramp legend: number of hotspots">
+            <span className="scale-label">Fewer hotspots</span>
             {FIRE_RAMP.map(color => (
               <span className="swatch" key={color} style={{background: color}} />
             ))}
-            <span className="scale-label">
-              More · Viridis ramp encodes monthly hotspots (up to {formatCount(monthPeak)})
-            </span>
+            <span className="scale-label">More hotspots</span>
           </div>
 
-          <p className="finding">
-            {monthTotal > 0 ? (
-              <>
-                <b>
-                  {monthFull(month)} {year}: {ratioForMonth.toFixed(1)}x the {yearSpanLabel} median for
-                  this month
-                </b>{' '}
-                ({formatCount(monthTotal)} hotspots vs multi-year median{' '}
-                {formatCount(Math.round(medianForMonth))}).
-              </>
-            ) : (
-              'No hotspots recorded in this area for the selected month.'
-            )}
-          </p>
         </div>
 
         <div>
@@ -224,7 +202,7 @@ export function CalendarSheet({
               {monthFull(month)} {year} daily breakdown
             </h2>
             <span className="range">
-              {formatCount(monthTotal)} hotspots · {monthDays.length} of {length} days active
+              {formatCount(monthTotal)} hotspots · {monthDays.length} of {length} days with data
             </span>
           </div>
 
@@ -254,7 +232,7 @@ export function CalendarSheet({
                   onClick={() => onSelect(active ? null : iso)}
                   title={
                     count === undefined
-                      ? 'No data loaded for this day'
+                      ? 'No data for this day'
                       : `${iso}: ${formatCount(count)} hotspots`
                   }
                   style={
@@ -276,11 +254,10 @@ export function CalendarSheet({
                 <b>
                   {dayNumber(peakDay.date)} {monthShort(month)}
                 </b>{' '}
-                with {formatCount(peakDay.detections)} hotspots (
-                {Math.round((peakDay.detections / Math.max(monthTotal, 1)) * 100)}% of month).
+                with {formatCount(peakDay.detections)} hotspots.
               </>
             ) : (
-              `Select another month cell in the ${yearSpanLabel} matrix to inspect its daily activity.`
+              'Pick a month above to see its daily activity.'
             )}
           </p>
         </div>
@@ -288,10 +265,8 @@ export function CalendarSheet({
 
       <TrendCharts
         months={months}
-        days={days}
         climatology={climatology}
         year={year}
-        selected={selected}
         yearsLoaded={years.length}
         yearsExpected={yearsExpected}
       />

@@ -1075,6 +1075,30 @@ a {
   line-height: 1.45;
 }
 
+.insight {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-chip);
+  background: var(--ground);
+}
+
+.insight-title {
+  display: block;
+  font-size: var(--fs-small);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.insight-line {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
 .notice {
   margin: 8px 0 0;
   padding: 6px 9px;

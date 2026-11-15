@@ -4,9 +4,17 @@ import {
   FIRE_RAMP,
   formatCount,
   formatDay,
+  FRP_CUTS,
   frpStepLabels,
+  monthFull,
 } from '../../lib/ramp'
+import {
+  anomalyLevel,
+  type MonthComparison,
+  type RangeActivity,
+} from '../../lib/insights'
 import type {Basemap, SensorsEnabled} from './MapView'
+import {DateRangePicker} from './DateRangePicker'
 
 export interface Preset {
   id: string
@@ -14,7 +22,7 @@ export interface Preset {
   bbox: BBox
 }
 
-export type TimeRangePreset = '24h' | '3d' | '7d' | 'day'
+export type TimeRangePreset = '24h' | '3d' | '7d' | 'day' | 'custom'
 export type ModeTab = 'simple' | 'time'
 
 interface ControlPanelProps {
@@ -25,8 +33,11 @@ interface ControlPanelProps {
   onBBox: (bbox: BBox) => void
   rangePreset: TimeRangePreset
   onRangePreset: (preset: '24h' | '3d' | '7d') => void
+  onRangeSelect: (from: string, to: string) => void
   rangeFrom: string
   rangeTo: string
+  datasetFrom: string
+  datasetTo: string
   modeTab: ModeTab
   onModeTab: (tab: ModeTab) => void
   sensorsEnabled: SensorsEnabled
@@ -36,14 +47,22 @@ interface ControlPanelProps {
   drawing: boolean
   onDrawing: (value: boolean) => void
   csvHref: string
+  insights: {
+    comparison: MonthComparison | null
+    activity: RangeActivity | null
+    areaKm2: number
+    /** True when the earlier years do not cover the selected area, so no ratio is shown. */
+    historyLimited: boolean
+  }
   totals: {
     detections: number
+    hasData: boolean
+    pending: boolean
     cells: number
     meanFrp: number
     truncated: boolean
     peak: number
     peakFrp: number
-    frpCuts: number[]
     sensors?: SensorTotals
   }
   status: Status
@@ -91,8 +110,11 @@ export function ControlPanel({
   onBBox,
   rangePreset,
   onRangePreset,
+  onRangeSelect,
   rangeFrom,
   rangeTo,
+  datasetFrom,
+  datasetTo,
   modeTab,
   onModeTab,
   sensorsEnabled,
@@ -102,6 +124,7 @@ export function ControlPanel({
   drawing,
   onDrawing,
   csvHref,
+  insights,
   totals,
   status,
   error,
@@ -137,9 +160,6 @@ export function ControlPanel({
     if (next[0] >= next[2] || next[1] >= next[3]) return
     onBBox(next)
   }
-
-  const modisCount = totals.sensors?.MODIS ?? 0
-  const viirsCount = totals.sensors?.VIIRS ?? 0
 
   return (
     <aside
@@ -192,6 +212,14 @@ export function ControlPanel({
             From <b>{formatDay(rangeFrom)}</b> to <b>{formatDay(rangeTo)}</b>
           </p>
 
+          <DateRangePicker
+            from={rangeFrom}
+            to={rangeTo}
+            min={datasetFrom}
+            max={datasetTo}
+            onChange={onRangeSelect}
+          />
+
           <div className="mode-tabs" role="tablist" aria-label="Display mode">
             <button
               type="button"
@@ -213,9 +241,7 @@ export function ControlPanel({
             </button>
           </div>
           {modeTab === 'time' && (
-            <p className="note">
-              Burning calendar sheet is open below. Select any day cell to filter the map to that date.
-            </p>
+            <p className="note">Pick a day in the calendar below to filter the map.</p>
           )}
         </section>
 
@@ -231,7 +257,6 @@ export function ControlPanel({
               <CheckIcon active={sensorsEnabled.MODIS} />
               <span className="sensor-name">MODIS</span>
               <span className="sensor-meta">1 km</span>
-              <span className="sensor-count">{formatCount(modisCount)}</span>
             </button>
             <button
               type="button"
@@ -242,24 +267,49 @@ export function ControlPanel({
               <CheckIcon active={sensorsEnabled.VIIRS} />
               <span className="sensor-name">VIIRS NOAA-20</span>
               <span className="sensor-meta">375 m</span>
-              <span className="sensor-count">{formatCount(viirsCount)}</span>
             </button>
           </div>
 
           <div className="totals" style={{marginTop: 10}}>
             <div className="total">
               <span className="k">Hotspots</span>
-              <span className="v">{formatCount(totals.detections)}</span>
+              <span className="v">{totals.pending ? '—' : formatCount(totals.detections)}</span>
             </div>
             <div className="total">
-              <span className="k">Hexagons</span>
-              <span className="v">{formatCount(totals.cells)}</span>
-            </div>
-            <div className="total">
-              <span className="k">Mean FRP</span>
+              <span className="k">Mean power</span>
               <span className="v">{totals.meanFrp > 0 ? `${totals.meanFrp.toFixed(1)} MW` : '—'}</span>
             </div>
           </div>
+
+          {!totals.pending && !totals.hasData && status === 'ok' && (
+            <p className="note">No hotspots recorded in this period.</p>
+          )}
+
+          {insights.comparison && (
+            <div className="insight">
+              <span className="insight-title">
+                {monthFull(insights.comparison.month)} {insights.comparison.year} —{' '}
+                {anomalyLevel(insights.comparison.percent)}
+              </span>
+              <span className="insight-line">
+                {formatCount(insights.comparison.detections)} hotspots on{' '}
+                {insights.comparison.daysLoaded} days ·{' '}
+                {insights.comparison.percent >= 0 ? '+' : ''}
+                {formatCount(insights.comparison.percent)} % vs the same days of the{' '}
+                {insights.comparison.years} earlier years (median{' '}
+                {formatCount(Math.round(insights.comparison.median))})
+              </span>
+            </div>
+          )}
+          {!insights.comparison && !insights.historyLimited && (
+            <p className="note">Not enough earlier data for this area to compare.</p>
+          )}
+          {!insights.comparison && insights.historyLimited && (
+            <p className="note">
+              No comparison for this area: the earlier years cover Europe only, the current window is
+              worldwide. Draw an area inside Europe or load the global history.
+            </p>
+          )}
 
           {status === 'not-ready' && (
             <div className="notice">
@@ -282,13 +332,9 @@ export function ControlPanel({
         <section className="section">
           <h3>Layers</h3>
           <div className="sub-label">Fire power (MW)</div>
-          <p className="note">
-            {status === 'loading'
-              ? 'Loading hexagons…'
-              : `Viridis ramp encodes mean FRP (MW) across ${formatCount(totals.cells)}${totals.truncated ? '+' : ''} H3 cells:`}
-          </p>
+          {status === 'loading' && <p className="note">Loading…</p>}
           <div className="legend">
-            {frpStepLabels(totals.frpCuts).map((label, index) => (
+            {frpStepLabels().map((label, index) => (
               <span className="legend-step" key={index}>
                 <span className="legend-bar" style={{background: FIRE_RAMP[index]}} />
                 <span className="legend-value">{label}</span>
@@ -308,7 +354,6 @@ export function ControlPanel({
             >
               <EyeIcon active={basemap === 'satellite'} />
               <span className="sensor-name">Satellite</span>
-              <span className="sensor-meta">Esri World Imagery</span>
             </button>
             <button
               type="button"
@@ -318,7 +363,6 @@ export function ControlPanel({
             >
               <EyeIcon active={basemap === 'dark'} />
               <span className="sensor-name">Dark</span>
-              <span className="sensor-meta">Esri canvas + borders</span>
             </button>
             <button
               type="button"
@@ -328,13 +372,12 @@ export function ControlPanel({
             >
               <EyeIcon active={basemap === 'blue-marble'} />
               <span className="sensor-name">Blue Marble</span>
-              <span className="sensor-meta">NASA GIBS, sharp to zoom 8</span>
             </button>
           </div>
         </section>
 
         <section className="section">
-          <h3>Overlays (1/{presets.length})</h3>
+          <h3>Quick areas</h3>
           <div className="presets">
             {presets.map(preset => (
               <button
@@ -358,7 +401,7 @@ export function ControlPanel({
               onClick={() => onDrawing(!drawing)}
               style={drawing ? {borderColor: 'var(--accent)'} : undefined}
             >
-              {drawing ? 'Drag on the map…' : 'Draw a rectangle'}
+              {drawing ? 'Drag on the map…' : 'Select area'}
             </button>
             <a className="btn" href={csvHref} download>
               Download CSV

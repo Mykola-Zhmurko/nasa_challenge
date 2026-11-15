@@ -1,5 +1,11 @@
-import {type FormEvent, useState} from 'react'
+import {type FormEvent, useEffect, useMemo, useRef, useState} from 'react'
 import type {BBox} from '../../lib/api'
+import {
+  boxAroundPoint,
+  parseCoordinates,
+  type PlaceSuggestion,
+  suggestPlaces,
+} from '../../lib/geocode'
 import {formatCount} from '../../lib/ramp'
 
 interface TopBarProps {
@@ -22,28 +28,7 @@ const NasaMark = () => (
   </svg>
 )
 
-function buildSmallBBox(lat: number, lon: number, delta = 0.35): BBox | null {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
-  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null
-  const minLon = Math.max(-180, Number((lon - delta).toFixed(4)))
-  const minLat = Math.max(-90, Number((lat - delta).toFixed(4)))
-  const maxLon = Math.min(180, Number((lon + delta).toFixed(4)))
-  const maxLat = Math.min(90, Number((lat + delta).toFixed(4)))
-  if (minLon >= maxLon || minLat >= maxLat) return null
-  return [minLon, minLat, maxLon, maxLat]
-}
-
-function parseRawCoords(raw: string): {lat: number; lon: number} | null {
-  const match = raw
-    .trim()
-    .match(/^([+-]?\d+(?:\.\d+)?)\s*[,;\s]\s*([+-]?\d+(?:\.\d+)?)$/)
-  if (!match) return null
-  const lat = Number(match[1])
-  const lon = Number(match[2])
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
-  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null
-  return {lat, lon}
-}
+const DEBOUNCE_MS = 220
 
 export function TopBar({
   detections,
@@ -56,51 +41,139 @@ export function TopBar({
 }: TopBarProps) {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const [places, setPlaces] = useState<PlaceSuggestion[]>([])
+  const [listOpen, setListOpen] = useState(false)
+  const [active, setActive] = useState(-1)
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const skipFetchRef = useRef(false)
+
+  const coords = useMemo(() => parseCoordinates(query), [query])
+
+  const rows = useMemo<PlaceSuggestion[]>(() => {
+    if (coords) {
+      return [
+        {
+          id: 'coords',
+          name: `${coords.lat.toFixed(3)}, ${coords.lon.toFixed(3)}`,
+          detail: 'Coordinates',
+          isCoords: true,
+          lat: coords.lat,
+          lon: coords.lon,
+          bbox: boxAroundPoint(coords.lat, coords.lon),
+        },
+      ]
+    }
+    return places
+  }, [coords, places])
+
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (coords) {
+      setPlaces([])
+      setActive(0)
+      setListOpen(true)
+      return
+    }
+    if (trimmed.length < 2) {
+      setPlaces([])
+      setActive(-1)
+      return
+    }
+    if (skipFetchRef.current) {
+      // The query was just filled in by picking a suggestion — do not reopen the list.
+      skipFetchRef.current = false
+      setPlaces([])
+      setActive(-1)
+      return
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      suggestPlaces(trimmed, controller.signal)
+        .then(list => {
+          setPlaces(list)
+          setActive(list.length ? 0 : -1)
+          setListOpen(true)
+        })
+        .catch(() => {
+          /* aborted or offline — keep the previous list */
+        })
+    }, DEBOUNCE_MS)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [query, coords])
+
+  useEffect(() => {
+    if (!listOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setListOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [listOpen])
+
+  const choose = (row: PlaceSuggestion) => {
+    const box = row.bbox ?? boxAroundPoint(row.lat, row.lon)
+    if (!box) return
+    onSearchBBox(box, row.detail && !row.isCoords ? `${row.name}, ${row.detail}` : row.name)
+    skipFetchRef.current = true
+    setQuery(row.name)
+    setPlaces([])
+    setListOpen(false)
+    setActive(-1)
+  }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const trimmed = query.trim()
     if (!trimmed || busy) return
 
-    const coords = parseRawCoords(trimmed)
     if (coords) {
-      const box = buildSmallBBox(coords.lat, coords.lon)
+      const box = boxAroundPoint(coords.lat, coords.lon)
       if (box) {
         onSearchBBox(box, `${coords.lat.toFixed(2)}, ${coords.lon.toFixed(2)}`)
+        setListOpen(false)
       }
+      return
+    }
+
+    const highlighted = active >= 0 ? rows[active] : undefined
+    if (highlighted) {
+      choose(highlighted)
       return
     }
 
     setBusy(true)
     try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(trimmed)}&limit=1`
-      const res = await fetch(url, {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': 'NASA-SpaceApps-FireCalendar/1.0 (https://firms.modaps.eosdis.nasa.gov)',
-        },
-      })
-      if (!res.ok) return
-      const list = (await res.json()) as Array<{
-        lat?: string
-        lon?: string
-        display_name?: string
-      }>
-      const first = list?.[0]
-      if (!first) return
-      const lat = Number(first.lat)
-      const lon = Number(first.lon)
-      const box = buildSmallBBox(lat, lon)
-      if (box) {
-        const shortLabel = first.display_name?.split(',')[0]?.trim() || trimmed
-        onSearchBBox(box, shortLabel)
-      }
+      const list = await suggestPlaces(trimmed)
+      const first = list[0]
+      if (first) choose(first)
     } catch {
       /* handle errors quietly */
     } finally {
       setBusy(false)
     }
   }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      if (!rows.length) return
+      event.preventDefault()
+      setListOpen(true)
+      setActive(prev => (prev + 1) % rows.length)
+    } else if (event.key === 'ArrowUp') {
+      if (!rows.length) return
+      event.preventDefault()
+      setListOpen(true)
+      setActive(prev => (prev <= 0 ? rows.length - 1 : prev - 1))
+    } else if (event.key === 'Escape') {
+      setListOpen(false)
+      setActive(-1)
+    }
+  }
+
+  const showList = listOpen && rows.length > 0
 
   return (
     <header className="topbar">
@@ -120,26 +193,58 @@ export function TopBar({
         <NasaMark />
         <div className="brand-copy">
           <h1>Fire Calendar</h1>
-          <span className="sub">Harmonized MODIS + VIIRS active fire hotspots</span>
+          <span className="sub">MODIS + VIIRS active fire hotspots</span>
         </div>
       </div>
 
-      <form className="top-search" role="search" onSubmit={handleSubmit}>
-        <label htmlFor="place-search" className="sr-only">
-          Search place or coordinates
-        </label>
-        <input
-          id="place-search"
-          type="search"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          placeholder="Place or lat, lon…"
-          aria-label="Search place or lat, lon"
-        />
-        <button type="submit" className="btn" disabled={busy}>
-          {busy ? '…' : 'Go'}
-        </button>
-      </form>
+      <div className="search-wrap" ref={wrapRef}>
+        <form className="top-search" role="search" onSubmit={handleSubmit}>
+          <label htmlFor="place-search" className="sr-only">
+            Search city or coordinates
+          </label>
+          <input
+            id="place-search"
+            type="search"
+            value={query}
+            onChange={event => {
+              skipFetchRef.current = false
+              setQuery(event.target.value)
+            }}
+            onFocus={() => {
+              if (rows.length) setListOpen(true)
+            }}
+            onKeyDown={onKeyDown}
+            placeholder="City or lat, lon…"
+            aria-label="Search city or lat, lon"
+            role="combobox"
+            aria-expanded={showList}
+            aria-controls="place-suggestions"
+            aria-autocomplete="list"
+            aria-activedescendant={showList && active >= 0 ? `place-option-${active}` : undefined}
+            autoComplete="off"
+          />
+          <button type="submit" className="btn" disabled={busy}>
+            {busy ? '…' : 'Go'}
+          </button>
+        </form>
+        {showList && (
+          <ul className="search-suggest" id="place-suggestions" role="listbox" aria-label="Matching cities">
+            {rows.map((row, index) => (
+              <li key={row.id} role="option" aria-selected={index === active} id={`place-option-${index}`}>
+                <button
+                  type="button"
+                  className={index === active ? 'suggest-row is-active' : 'suggest-row'}
+                  onMouseEnter={() => setActive(index)}
+                  onClick={() => choose(row)}
+                >
+                  <span className="suggest-name">{row.name}</span>
+                  {row.detail && <span className="suggest-detail">{row.detail}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <div className="readout">
         <span className="pair">
@@ -159,14 +264,6 @@ export function TopBar({
       <nav className="top-links" aria-label="Reference links">
         <a className="btn" href={csvHref} download>
           Download CSV
-        </a>
-        <a
-          className="quiet-link"
-          href="https://firms.modaps.eosdis.nasa.gov/map/"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Data: NASA FIRMS
         </a>
         <button type="button" className="quiet-link" onClick={onOpenAbout}>
           About

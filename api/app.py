@@ -24,6 +24,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+MAX_CELLS = 25000
+
 
 def parse_iso_date(val: str, field_name: str = "date") -> str:
     """Validate and normalize an ISO YYYY-MM-DD date string."""
@@ -266,6 +268,7 @@ async def cells(
     from_date: Optional[str] = Query(None),
     to: Optional[str] = Query(None),
     bbox: Optional[str] = Query(None),
+    sensor: Optional[str] = Query(None),
 ):
     """Hexagon cell aggregates for the map."""
     con, ready = get_connection()
@@ -298,27 +301,47 @@ async def cells(
                 minlon, minlat, maxlon, maxlat = parse_bbox_str(bbox)
                 conditions.append("lat >= ? AND lat <= ? AND lon >= ? AND lon <= ?")
                 params.extend([minlat, maxlat, minlon, maxlon])
+            if sensor is not None:
+                raw_tokens = [t.strip() for t in sensor.split(",")]
+                if not raw_tokens or any(not t for t in raw_tokens):
+                    raise ValueError(f"Invalid sensor '{sensor}': accepted values are MODIS, VIIRS")
+                tokens_upper: List[str] = []
+                for t in raw_tokens:
+                    u = t.upper()
+                    if u not in ("MODIS", "VIIRS"):
+                        raise ValueError(f"Invalid sensor '{t}': accepted values are MODIS, VIIRS")
+                    if u not in tokens_upper:
+                        tokens_upper.append(u)
+                if tokens_upper:
+                    placeholders = ", ".join(["?"] * len(tokens_upper))
+                    conditions.append(f"sensor IN ({placeholders})")
+                    params.extend(tokens_upper)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         parent_res = min(res, 8)
 
-        query = f"""
-            SELECT
-                h3_h3_to_string(h3_cell_to_parent(h3_r8, {parent_res})) AS h3,
-                COUNT(*) AS detections,
-                AVG(frp_mw) AS mean_frp
-            FROM fires
-            {where_sql}
-            GROUP BY h3
-            ORDER BY detections DESC
-            LIMIT 20001
-        """
-        rows = con.execute(query, params).fetchall()
-        truncated = len(rows) > 20000
+        while True:
+            query = f"""
+                SELECT
+                    h3_h3_to_string(h3_cell_to_parent(h3_r8, {parent_res})) AS h3,
+                    COUNT(*) AS detections,
+                    AVG(frp_mw) AS mean_frp
+                FROM fires
+                {where_sql}
+                GROUP BY h3
+                ORDER BY detections DESC
+                LIMIT {MAX_CELLS + 1}
+            """
+            rows = con.execute(query, params).fetchall()
+            if len(rows) <= MAX_CELLS or parent_res <= 1:
+                break
+            parent_res -= 1
+
+        truncated = len(rows) > MAX_CELLS
         if truncated:
-            rows = rows[:20000]
+            rows = rows[:MAX_CELLS]
 
         result_cells = [
             {
@@ -328,7 +351,7 @@ async def cells(
             }
             for r in rows
         ]
-        return {"cells": result_cells, "truncated": truncated}
+        return {"cells": result_cells, "res": parent_res, "truncated": truncated}
     finally:
         con.close()
 
@@ -449,9 +472,22 @@ async def calendar(req: CalendarRequest):
     try:
         bbox_tuple = validate_bbox_list(req.bbox) if req.bbox is not None else None
         try:
-            spatial_sql, spatial_params = build_h3_sql_filter(
-                req.h3_cells, bbox_tuple, req.res
-            )
+            # Two filters are needed: `fires` has lat/lon and takes the exact box (same
+            # predicate as /api/cells and /api/export.csv), while the precomputed
+            # `calendar_monthly` only has h3_r8 and must be filtered by H3 cells.
+            if req.h3_cells:
+                spatial_sql, spatial_params = build_h3_sql_filter(
+                    req.h3_cells, None, req.res
+                )
+                h3_sql, h3_params = spatial_sql, spatial_params
+            elif bbox_tuple is not None:
+                minlon, minlat, maxlon, maxlat = bbox_tuple
+                spatial_sql = "(lat >= ? AND lat <= ? AND lon >= ? AND lon <= ?)"
+                spatial_params = [minlat, maxlat, minlon, maxlon]
+                h3_sql, h3_params = "", []
+            else:
+                spatial_sql, spatial_params = "", []
+                h3_sql, h3_params = "", []
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -513,8 +549,8 @@ async def calendar(req: CalendarRequest):
             for r in days_rows
         ]
 
-        # Climatology from calendar_monthly (multi-year median and mean per month)
-        if spatial_sql:
+        # Climatology from calendar_monthly or fires (multi-year median and mean per month)
+        if req.h3_cells:
             clim_rows = con.execute(
                 f"""
                 WITH yearly AS (
@@ -523,7 +559,7 @@ async def calendar(req: CalendarRequest):
                         year,
                         SUM(detections)::DOUBLE AS yr_detections
                     FROM calendar_monthly
-                    WHERE {spatial_sql}
+                    WHERE {h3_sql}
                     GROUP BY month, year
                 )
                 SELECT
@@ -533,6 +569,20 @@ async def calendar(req: CalendarRequest):
                 FROM yearly
                 GROUP BY month
                 ORDER BY month
+                """,
+                h3_params,
+            ).fetchall()
+        elif bbox_tuple is not None:
+            clim_rows = con.execute(
+                f"""
+                WITH yearly AS (
+                    SELECT EXTRACT(MONTH FROM ts) AS month, EXTRACT(YEAR FROM ts) AS year, COUNT(*)::DOUBLE AS yr_detections
+                    FROM fires
+                    WHERE {spatial_sql}
+                    GROUP BY month, year
+                )
+                SELECT month, MEDIAN(yr_detections) AS median_detections, AVG(yr_detections) AS mean_detections
+                FROM yearly GROUP BY month ORDER BY month
                 """,
                 spatial_params,
             ).fetchall()
@@ -605,12 +655,34 @@ async def calendar(req: CalendarRequest):
             },
         }
 
+        # Extent covered by the earlier years — the UI must not compare an area the
+        # historical record does not reach (that produced a meaningless anomaly).
+        newest_year = max((int(r[0]) for r in months_rows), default=None)
+        history_extent = None
+        if newest_year is not None:
+            extent_row = con.execute(
+                """
+                SELECT MIN(lon), MIN(lat), MAX(lon), MAX(lat)
+                FROM fires
+                WHERE ts < make_date(?, 1, 1)
+                """,
+                [newest_year],
+            ).fetchone()
+            if extent_row and extent_row[0] is not None:
+                history_extent = [
+                    float(extent_row[0]),
+                    float(extent_row[1]),
+                    float(extent_row[2]),
+                    float(extent_row[3]),
+                ]
+
         return {
             "months": months,
             "days": days,
             "climatology": climatology,
             "anomaly": anomaly,
             "totals": totals,
+            "history_extent": history_extent,
         }
     finally:
         con.close()
@@ -667,7 +739,7 @@ async def export_csv(
 
         where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         query = f"""
-            SELECT ts, lat, lon, sensor, satellite, confidence_pct, frp_mw, daynight, h3_r8
+            SELECT ts, lat, lon, sensor, satellite, confidence_pct, frp_mw, daynight, h3_h3_to_string(h3_r8) AS h3_r8
             FROM fires
             {where_sql}
             ORDER BY ts, h3_r8

@@ -65,11 +65,10 @@ def dedupe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         kind="mergesort",
     )
 
-    # For 2-bit masks (values in {1, 2, 3}), groupwise bitwise OR equals min | max.
+    # Compute groupwise bitwise OR across all source masks in the cell-day group.
     grouped = sorted_df.groupby(["h3_r8", "ts"], sort=False)["sources"]
-    grp_min = grouped.transform("min")
-    grp_max = grouped.transform("max")
-    sorted_df = sorted_df.assign(sources=(grp_min | grp_max).astype(np.int32))
+    grp_mask = grouped.transform(lambda s: np.bitwise_or.reduce(s.to_numpy()))
+    sorted_df = sorted_df.assign(sources=grp_mask.astype(np.int32))
 
     deduped = sorted_df.drop_duplicates(
         subset=["h3_r8", "ts"], keep="first"

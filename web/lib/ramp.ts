@@ -32,33 +32,12 @@ export function formatSatellite(sat: string): string {
   return sat || '—'
 }
 
-const DEFAULT_FRP_CUTS = [2.5, 5, 10, 25, 100]
-
-/** Five quantile upper bounds (MW) derived from the loaded cells' mean_frp. */
-export function frpCuts(cells: {mean_frp: number}[]): number[] {
-  if (!cells.length) return DEFAULT_FRP_CUTS
-  const values = cells
-    .map(cell => cell.mean_frp)
-    .filter(val => Number.isFinite(val) && val > 0)
-    .sort((a, b) => a - b)
-  if (!values.length) return DEFAULT_FRP_CUTS
-  const n = values.length
-  const cuts = FIRE_RAMP.map((_, idx) => {
-    const pos =
-      idx === FIRE_RAMP.length - 1
-        ? n - 1
-        : Math.min(n - 1, Math.max(0, Math.floor(((idx + 1) / FIRE_RAMP.length) * n) - 1))
-    const val = values[pos] ?? 0
-    return Math.round(val * 10) / 10
-  })
-  for (let i = 1; i < cuts.length; i++) {
-    const prev = cuts[i - 1] ?? 0
-    if ((cuts[i] ?? 0) < prev) {
-      cuts[i] = prev
-    }
-  }
-  return cuts
-}
+/**
+ * Fixed fire-power classes in MW. The same five classes are used for the map colours and for both
+ * legends, so a colour means the same thing in every area, at every zoom level and over time.
+ * The bounds sit on the worldwide quantiles of the mean fire power per hotspot area.
+ */
+export const FRP_CUTS = [2.5, 5, 10, 25, 100]
 
 export function frpStepIndex(value: number, cuts: number[]): number {
   if (value <= 0 || !cuts.length) return 0
@@ -73,12 +52,11 @@ export function frpRampColor(value: number, cuts: number[]): string {
   return FIRE_RAMP[index] ?? '#440154'
 }
 
-export function frpStepLabels(cuts: number[]): string[] {
+export function frpStepLabels(): string[] {
   const fmt = (n: number) => (n >= 100 ? String(Math.round(n)) : n.toFixed(1))
-  return cuts.map((upper, index) => {
-    const lower = index === 0 ? 0 : (cuts[index - 1] ?? 0)
+  return FRP_CUTS.map((upper, index) => {
+    const lower = index === 0 ? 0 : (FRP_CUTS[index - 1] ?? 0)
     if (index === 0) return `0.0–${fmt(upper)}`
-    if (lower >= upper) return `${fmt(upper)}`
     return `${fmt(lower)}–${fmt(upper)}`
   })
 }
@@ -98,19 +76,6 @@ export function rampColor(value: number, peak: number): string {
 /** Ink that stays legible (>= 4.5:1 WCAG AA) on a filled Viridis ramp step. */
 export function rampInk(value: number, peak: number): string {
   return stepIndex(value, peak) >= 2 ? '#101216' : '#ffffff'
-}
-
-/** Upper bound of each step, so the legend carries real numbers. */
-export function stepCuts(peak: number): number[] {
-  return FIRE_RAMP.map((_, index) => Math.ceil((peak * (index + 1)) / FIRE_RAMP.length))
-}
-
-export function stepLabels(peak: number): string[] {
-  const cuts = stepCuts(peak)
-  return cuts.map((upper, index) => {
-    const lower = index === 0 ? 1 : (cuts[index - 1] ?? 0) + 1
-    return lower >= upper ? `${upper}` : `${lower}–${upper}`
-  })
 }
 
 export function formatCount(value: number): string {

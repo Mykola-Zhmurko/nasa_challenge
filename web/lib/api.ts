@@ -21,6 +21,7 @@ export interface Cell {
 export interface CellsResponse {
   cells: Cell[]
   truncated: boolean
+  res?: number
 }
 
 export interface PointDetection {
@@ -78,6 +79,8 @@ export interface CalendarResponse {
   climatology: CalendarClimatology[]
   anomaly: CalendarAnomaly[]
   totals: {detections: number; cells: number; sensors?: SensorTotals}
+  /** Extent covered by the years before the newest one; null when there is no history. */
+  history_extent?: BBox | null
 }
 
 export interface Result<T> {
@@ -116,10 +119,20 @@ export function fetchHealth(signal?: AbortSignal) {
 }
 
 export function fetchCells(
-  {res, from, to, bbox}: {res: number; from: string; to: string; bbox: BBox},
+  {
+    res,
+    from,
+    to,
+    bbox,
+    sensors,
+  }: {res: number; from: string; to: string; bbox: BBox; sensors?: string[]},
   signal?: AbortSignal,
 ) {
-  const query = new URLSearchParams({res: String(res), from, to, bbox: bbox.join(',')})
+  const params: Record<string, string> = {res: String(res), from, to, bbox: bbox.join(',')}
+  if (sensors && sensors.length === 1 && sensors[0]) {
+    params.sensor = sensors[0]
+  }
+  const query = new URLSearchParams(params)
   return request<CellsResponse>(`${API_BASE}/cells?${query.toString()}`, undefined, signal)
 }
 

@@ -1,34 +1,52 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
+import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import '../styles/tokens.css'
 import '../styles/app.css'
 import type {BBox, CalendarResponse, Cell, Health, SensorTotals, Status} from '../lib/api'
 import {exportCsvHref, fetchCalendar, fetchCells, fetchHealth} from '../lib/api'
-import {formatDay, frpCuts, shiftIsoDate} from '../lib/ramp'
+import {formatDay, shiftIsoDate} from '../lib/ramp'
+import {bboxAreaKm2, bboxInside, monthComparison, rangeActivity} from '../lib/insights'
 import {resForZoom} from '../lib/zoom'
+import {formatArea, formatDistance, pathLengthM, ringAreaM2, type LatLon} from '../lib/measure'
+import {clampRange, isIsoDate, type DateWindow} from '../lib/range'
+import {buildShareUrl} from './lib/share'
 import {TopBar} from './components/TopBar'
 import {ControlPanel, type ModeTab, type Preset, type TimeRangePreset} from './components/ControlPanel'
-import {MapView, type Basemap, type SensorsEnabled} from './components/MapView'
+import {MapView, type Basemap, type MeasureMode, type SensorsEnabled} from './components/MapView'
 import {TimelineBar} from './components/TimelineBar'
 import {CalendarSheet} from './components/CalendarSheet'
 
 const PRESETS: Preset[] = [
   {id: 'world', label: 'World', bbox: [-180, -58, 180, 72]},
-  {id: 'europe', label: 'Europe', bbox: [-12, 34, 32, 72]},
-  {id: 'mediterranean', label: 'Mediterranean', bbox: [-10, 29, 42, 46]},
-  {id: 'ukraine', label: 'Ukraine', bbox: [22, 44, 41, 52]},
-  {id: 'amazon', label: 'Amazon', bbox: [-74, -20, -44, 6]},
-  {id: 'california', label: 'California', bbox: [-125, 32, -114, 42]},
+  {id: 'africa', label: 'Africa', bbox: [-20, -35, 52, 38]},
+  {id: 'asia', label: 'Asia', bbox: [26, -11, 180, 78]},
+  {id: 'europe', label: 'Europe', bbox: [-25, 34, 45, 72]},
+  {id: 'north-america', label: 'North America', bbox: [-170, 5, -50, 75]},
+  {id: 'south-america', label: 'South America', bbox: [-82, -56, -34, 13]},
+  {id: 'oceania', label: 'Oceania', bbox: [110, -48, 180, 0]},
 ]
 
 const FALLBACK_WINDOW = {from: '2026-11-07', to: '2026-11-14'}
 const DISCLAIMER_STORAGE_KEY = 'fire_calendar_disclaimer_hide'
+
+/** A preset replaces a shared custom window, so drop it from the address bar too. */
+function clearCustomWindowFromUrl() {
+  if (typeof window === 'undefined') return
+  const params = new URLSearchParams(window.location.search)
+  if (!params.has('from') && !params.has('to')) return
+  params.delete('from')
+  params.delete('to')
+  const query = params.toString()
+  window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
+}
 
 interface InitialUrlState {
   bbox: BBox
   areaId: string
   rangePreset: TimeRangePreset
   day: string | null
+  customRange: DateWindow | null
   pinnedRes: number | null
   basemap: Basemap
   sensorsEnabled: SensorsEnabled
@@ -40,6 +58,7 @@ function readInitialUrlState(): InitialUrlState {
     areaId: 'world',
     rangePreset: '7d',
     day: null,
+    customRange: null,
     pinnedRes: null,
     basemap: 'satellite',
     sensorsEnabled: {MODIS: true, VIIRS: true},
@@ -75,6 +94,13 @@ function readInitialUrlState(): InitialUrlState {
     defaults.rangePreset = 'day'
   }
 
+  const rawFrom = params.get('from')
+  const rawTo = params.get('to')
+  if (!defaults.day && rawFrom && rawTo && isIsoDate(rawFrom) && isIsoDate(rawTo)) {
+    defaults.customRange = rawFrom <= rawTo ? {from: rawFrom, to: rawTo} : {from: rawTo, to: rawFrom}
+    defaults.rangePreset = 'custom'
+  }
+
   const rawRes = params.get('res')
   if (rawRes && rawRes !== 'auto') {
     const parsed = Number(rawRes)
@@ -100,19 +126,13 @@ function readInitialUrlState(): InitialUrlState {
   return defaults
 }
 
-function weightedFrp(months: CalendarResponse['months'] | undefined): number {
-  if (!months || !months.length) return 0
-  const weight = months.reduce((sum, item) => sum + item.detections, 0)
-  if (!weight) return 0
-  const total = months.reduce((sum, item) => sum + item.mean_frp * item.detections, 0)
-  return total / weight
-}
-
 export default function App() {
   const initial = useMemo(() => readInitialUrlState(), [])
 
   const [health, setHealth] = useState<Health | null>(null)
   const [bbox, setBBox] = useState<BBox>(initial.bbox)
+  const [viewBBox, setViewBBox] = useState<BBox | null>(null)
+  const mapRef = useRef<L.Map | null>(null)
   const [areaId, setAreaId] = useState(initial.areaId)
   const [zoom, setZoom] = useState(2)
   const [pinnedRes, setPinnedRes] = useState<number | null>(initial.pinnedRes)
@@ -121,9 +141,15 @@ export default function App() {
   const [sensorsEnabled, setSensorsEnabled] = useState<SensorsEnabled>(initial.sensorsEnabled)
   const [rangePreset, setRangePreset] = useState<TimeRangePreset>(initial.rangePreset)
   const [day, setDay] = useState<string | null>(initial.day)
+  const [customRange, setCustomRange] = useState<DateWindow | null>(initial.customRange)
   const [modeTab, setModeTab] = useState<ModeTab>('simple')
 
   const [drawing, setDrawing] = useState(false)
+  const [measuring, setMeasuring] = useState(false)
+  const [measureMode, setMeasureMode] = useState<MeasureMode>('distance')
+  const [measurePoints, setMeasurePoints] = useState<LatLon[]>([])
+  const [captureToken, setCaptureToken] = useState(0)
+  const [captureState, setCaptureState] = useState<'idle' | 'busy' | 'saved' | 'error'>('idle')
   const [playing, setPlaying] = useState(false)
   const [calendarOpen, setCalendarOpen] = useState(false)
   const [timelineOpen, setTimelineOpen] = useState(false)
@@ -158,15 +184,21 @@ export default function App() {
 
   const {rangeFrom, rangeTo} = useMemo(() => {
     if (day) return {rangeFrom: day, rangeTo: day}
+    if (rangePreset === 'custom' && customRange) return {rangeFrom: customRange.from, rangeTo: customRange.to}
     if (rangePreset === '24h') return {rangeFrom: to, rangeTo: to}
     if (rangePreset === '3d') return {rangeFrom: shiftIsoDate(to, -2, from), rangeTo: to}
     return {rangeFrom: shiftIsoDate(to, -7, from), rangeTo: to}
-  }, [day, rangePreset, from, to])
+  }, [day, customRange, rangePreset, from, to])
 
   const dayRef = useRef(day)
   useEffect(() => {
     dayRef.current = day
   }, [day])
+
+  const enabledSensors = useMemo(
+    () => (['MODIS', 'VIIRS'] as const).filter(s => sensorsEnabled[s]),
+    [sensorsEnabled],
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -183,7 +215,7 @@ export default function App() {
     if (zoom >= 8) return
     const controller = new AbortController()
     setCellsStatus('loading')
-    fetchCells({res, from: rangeFrom, to: rangeTo, bbox}, controller.signal).then(result => {
+    fetchCells({res, from: rangeFrom, to: rangeTo, bbox, sensors: enabledSensors}, controller.signal).then(result => {
       if (result.status === 'idle') return
       setCellsStatus(result.status)
       setCellsError(result.error)
@@ -191,7 +223,7 @@ export default function App() {
       setTruncated(result.data?.truncated ?? false)
     })
     return () => controller.abort()
-  }, [bbox, res, rangeFrom, rangeTo, reload, zoom])
+  }, [bbox, res, rangeFrom, rangeTo, reload, zoom, enabledSensors])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -249,9 +281,9 @@ export default function App() {
     const activeDays = (calendar?.days ?? []).filter(
       item => item.date >= rangeFrom && item.date <= rangeTo,
     )
-    const rawDetections = activeDays.length
-      ? activeDays.reduce((sum, item) => sum + item.detections, 0)
-      : calendar?.totals.detections ?? 0
+    // A window without rows must read 0, never the dataset total: otherwise an
+    // empty period claims hundreds of thousands of hotspots while the map is blank.
+    const rawDetections = activeDays.reduce((sum, item) => sum + item.detections, 0)
 
     const sensors = rangeSensors ?? calendar?.totals.sensors
     let detections = rawDetections
@@ -268,21 +300,38 @@ export default function App() {
     const meanFrp = activeDays.length
       ? activeDays.reduce((sum, item) => sum + item.mean_frp * item.detections, 0) /
         Math.max(1, rawDetections)
-      : weightedFrp(calendar?.months)
+      : 0
     const peak = cells.reduce((max, cell) => Math.max(max, cell.detections), 0)
     const peakFrp = cells.reduce((max, cell) => Math.max(max, cell.mean_frp), 0)
-    const cuts = frpCuts(cells)
     return {
       detections,
+      hasData: activeDays.length > 0,
+      pending: calendar === null,
       cells: !sensorsEnabled.MODIS && !sensorsEnabled.VIIRS ? 0 : cells.length,
       meanFrp,
       truncated,
       peak,
       peakFrp,
-      frpCuts: cuts,
       sensors,
     }
   }, [rangeFrom, rangeTo, calendar, rangeSensors, sensorsEnabled, cells, truncated])
+
+  const insights = useMemo(() => {
+    const activity = calendar ? rangeActivity(calendar.days, rangeFrom, rangeTo) : null
+    const rawComparison = calendar ? monthComparison(calendar.days, day ?? rangeTo) : null
+    // Only compare where the earlier years actually cover the selected area, otherwise
+    // "world" numbers would be measured against a Europe-only history.
+    const extent = calendar?.history_extent ?? null
+    const covered = rawComparison ? (!extent || bboxInside(bbox, extent)) : false
+    const comparison = covered ? rawComparison : null
+    return {
+      comparison,
+      activity,
+      areaKm2: bboxAreaKm2(bbox),
+      historyLimited: Boolean(rawComparison) && !covered,
+      historyExtent: extent,
+    }
+  }, [calendar, rangeFrom, rangeTo, bbox, day])
 
   const csvHref = exportCsvHref({bbox, from: rangeFrom, to: rangeTo})
   const status: Status = cellsStatus === 'ok' ? calendarStatus : cellsStatus
@@ -310,8 +359,72 @@ export default function App() {
   const applyRangePreset = (preset: '24h' | '3d' | '7d') => {
     setPlaying(false)
     setDay(null)
+    setCustomRange(null)
     setRangePreset(preset)
+    clearCustomWindowFromUrl()
   }
+
+  const applyRangeSelect = (nextFrom: string, nextTo: string) => {
+    if (!isIsoDate(nextFrom) || !isIsoDate(nextTo)) return
+    setPlaying(false)
+    setDay(null)
+    setCustomRange(clampRange(nextFrom, nextTo, from, to))
+    setRangePreset('custom')
+  }
+
+  const measureDistance = useMemo(() => pathLengthM(measurePoints), [measurePoints])
+  const measureArea = useMemo(
+    () => (measureMode === 'area' ? ringAreaM2(measurePoints) : 0),
+    [measureMode, measurePoints],
+  )
+
+  const toggleMeasure = () => {
+    const next = !measuring
+    setMeasuring(next)
+    setMeasurePoints([])
+    if (next) {
+      setDrawing(false)
+      setCalendarOpen(false)
+      setHelpOpen(false)
+    }
+  }
+
+  const changeMeasureMode = (mode: MeasureMode) => {
+    setMeasureMode(mode)
+    setMeasurePoints([])
+  }
+
+  const addMeasurePoint = (point: LatLon) => {
+    setMeasurePoints(previous => [...previous, point])
+  }
+
+  const handleCapture = () => {
+    if (captureState === 'busy') return
+    setCaptureState('busy')
+    setCaptureToken(token => token + 1)
+  }
+
+  const handleCaptured = (result: {ok: boolean; error?: string}) => {
+    setCaptureState(result.ok ? 'saved' : 'error')
+  }
+
+  useEffect(() => {
+    if (captureState !== 'saved' && captureState !== 'error') return
+    const timer = window.setTimeout(() => setCaptureState('idle'), 3200)
+    return () => window.clearTimeout(timer)
+  }, [captureState])
+
+  const captureFooter = [
+    'NASA FIRMS',
+    `${formatDay(rangeFrom)} – ${formatDay(rangeTo)}`,
+    measurePoints.length > 1
+      ? measureMode === 'area' && measurePoints.length > 2
+        ? `Measured ${formatDistance(measureDistance)} · ${formatArea(measureArea)}`
+        : `Measured ${formatDistance(measureDistance)}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   const handleModeTab = (tab: ModeTab) => {
     setModeTab(tab)
@@ -329,22 +442,24 @@ export default function App() {
 
   const handleShare = () => {
     if (typeof window === 'undefined') return
-    const params = new URLSearchParams()
-    params.set('bbox', bbox.map(n => Number(n.toFixed(2))).join(','))
-    if (day) {
-      params.set('day', day)
-    } else {
-      params.set('range', rangePreset === 'day' ? '7d' : rangePreset)
-    }
-    params.set('res', pinnedRes === null ? 'auto' : String(res))
-    params.set('basemap', basemap)
-    const activeSensors = [
-      sensorsEnabled.MODIS ? 'MODIS' : null,
-      sensorsEnabled.VIIRS ? 'VIIRS' : null,
-    ].filter(Boolean)
-    params.set('sensors', activeSensors.join(','))
-
-    const nextUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`
+    const bounds = mapRef.current?.getBounds()
+    const live: BBox | null = bounds
+      ? [
+          Math.max(-180, bounds.getWest()), Math.max(-90, bounds.getSouth()),
+          Math.min(180, bounds.getEast()), Math.min(90, bounds.getNorth()),
+        ]
+      : null
+    const shareBox = live && live[0] < live[2] && live[1] < live[3] ? live : viewBBox ?? bbox
+    const nextUrl = buildShareUrl(window.location.origin + window.location.pathname, {
+      bbox: shareBox,
+      day,
+      rangePreset,
+      customRange,
+      res,
+      pinnedRes,
+      basemap,
+      sensorsEnabled,
+    })
     window.history.replaceState(null, '', nextUrl)
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(nextUrl).catch(() => {})
@@ -370,8 +485,14 @@ export default function App() {
     setBasemap('satellite')
     setSensorsEnabled({MODIS: true, VIIRS: true})
     setDay(null)
+    setCustomRange(null)
     setRangePreset('7d')
     setPlaying(false)
+    // The address bar is a second copy of the state: without this, a reload
+    // restores the area, range and layers that Reset just cleared.
+    if (typeof window !== 'undefined' && (window.location.search || window.location.hash)) {
+      window.history.replaceState(null, '', `${window.location.origin}${window.location.pathname}`)
+    }
   }
 
   return (
@@ -401,9 +522,20 @@ export default function App() {
           sensorsEnabled={sensorsEnabled}
           areaSensors={totals.sensors}
           drawing={drawing}
+          measuring={measuring}
+          measureMode={measureMode}
+          measurePoints={measurePoints}
+          onMeasurePoint={addMeasurePoint}
+          captureToken={captureToken}
+          captureFooter={captureFooter}
+          onCaptured={handleCaptured}
           onBBox={applyBBox}
+          onViewBBox={setViewBBox}
           onCursor={setCursor}
           onZoom={setZoom}
+          onMapReady={map => {
+            mapRef.current = map
+          }}
         />
 
         <ControlPanel
@@ -414,8 +546,11 @@ export default function App() {
           onBBox={applyBBox}
           rangePreset={rangePreset}
           onRangePreset={applyRangePreset}
+          onRangeSelect={applyRangeSelect}
           rangeFrom={rangeFrom}
           rangeTo={rangeTo}
+          datasetFrom={from}
+          datasetTo={to}
           modeTab={modeTab}
           onModeTab={handleModeTab}
           sensorsEnabled={sensorsEnabled}
@@ -426,6 +561,7 @@ export default function App() {
           onDrawing={setDrawing}
           csvHref={csvHref}
           totals={totals}
+          insights={insights}
           status={status}
           error={cellsError}
           onRetry={() => setReload(value => value + 1)}
@@ -458,9 +594,8 @@ export default function App() {
                   Cloud cover, heavy smoke, or tree canopy can obscure active fires from satellite sensors.
                 </li>
                 <li>
-                  MODIS (1 km) and VIIRS (375 m) detections are harmonized into one H3 series covering{' '}
-                  {formatDay(from)} to {formatDay(to)}, with anomalies measured against the multi-year
-                  monthly median.
+                  MODIS (1 km) and VIIRS (375 m) detections are combined into one series covering{' '}
+                  {formatDay(from)} to {formatDay(to)}.
                 </li>
               </ul>
               <div className="disclaimer-foot">
@@ -501,19 +636,33 @@ export default function App() {
             </div>
             <div className="help-grid">
               <div>
-                <h3>Harmonized MODIS + VIIRS series</h3>
+                <h3>MODIS + VIIRS combined</h3>
                 <p>
-                  MODIS Collection 6.1 (1 km) and VIIRS NOAA-20 (375 m) active fire detections are
-                  filtered for nominal/high confidence and deduplicated within the same H3 resolution-8 cell
-                  (~0.74 km2) per UTC day, keeping the highest-confidence, highest-FRP observation.
+                  MODIS (1 km) and VIIRS NOAA-20 (375 m) detections are filtered for nominal or high
+                  confidence, then merged: several detections in the same small area on the same day
+                  count once.
                 </p>
               </div>
               <div>
                 <h3>Using the interface</h3>
                 <p>
-                  Use the right <b>MODE</b> panel to switch between 24HRS, 3 DAYS, and 7 DAYS, toggle
-                  sensors, and export filtered detections as CSV. Hexagon size follows the map zoom, and
-                  zooming to level 8+ reveals individual FIRMS points.
+                  Use the <b>MODE</b> panel to switch between 24HRS, 3 DAYS and 7 DAYS, toggle sensors,
+                  and download the filtered detections as CSV. Zooming in shows individual detections.
+                </p>
+              </div>
+              <div>
+                <h3>Data and credit</h3>
+                <p>
+                  Fire detections: NASA FIRMS (MODIS C6.1, VIIRS C2 NOAA-20). Map imagery: Esri and
+                  OpenStreetMap contributors. Cite as <b>NASA FIRMS / LANCE</b>,{' '}
+                  <a href="https://firms.modaps.eosdis.nasa.gov" target="_blank" rel="noreferrer">
+                    firms.modaps.eosdis.nasa.gov
+                  </a>
+                  .
+                </p>
+                <p>
+                  Only NOAA-20 is listed for VIIRS because Suomi-NPP no longer delivers new detections in
+                  this window; NOAA-21 is not imported yet.
                 </p>
               </div>
             </div>
@@ -531,9 +680,13 @@ export default function App() {
               setPlaying(false)
               setDay(next)
               setRangePreset(next ? 'day' : '7d')
+              // Picking a day filters the map — close the sheet, otherwise it covers
+              // the very area the hotspots are drawn in.
+              if (next) setCalendarOpen(false)
             }}
             from={from}
             to={to}
+            rangeTo={rangeTo}
             onClose={() => {
               setCalendarOpen(false)
               setModeTab('simple')
@@ -543,7 +696,7 @@ export default function App() {
 
         {timelineOpen && (
           <TimelineBar
-            days={(calendar?.days ?? []).slice(-14)}
+            days={calendar?.days ?? []}
             selected={day}
             rangePreset={rangePreset}
             onSelect={next => {
@@ -558,6 +711,84 @@ export default function App() {
             onPlay={() => setPlaying(value => !value)}
             onClose={() => setTimelineOpen(false)}
           />
+        )}
+
+        {measuring && (
+          <section className="measure-card" role="dialog" aria-label="Measure tool">
+            <div className="sheet-bar">
+              <h2>Measure</h2>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={toggleMeasure}
+                aria-label="Close measure tool"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                  <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.4" fill="none" />
+                </svg>
+              </button>
+            </div>
+            <div className="measure-modes" role="group" aria-label="Measure mode">
+              <button
+                type="button"
+                className="measure-mode"
+                aria-pressed={measureMode === 'distance'}
+                onClick={() => changeMeasureMode('distance')}
+              >
+                Distance
+              </button>
+              <button
+                type="button"
+                className="measure-mode"
+                aria-pressed={measureMode === 'area'}
+                onClick={() => changeMeasureMode('area')}
+              >
+                Area
+              </button>
+            </div>
+            <p className="measure-hint">
+              {measureMode === 'distance'
+                ? 'Click the map to set points. The line follows the pointer until you click.'
+                : 'Click three or more points; the ring closes automatically.'}
+            </p>
+            <div className="measure-values">
+              <div className="measure-value">
+                <span>Distance</span>
+                <b>{formatDistance(measureDistance)}</b>
+              </div>
+              {measureMode === 'area' && (
+                <div className="measure-value">
+                  <span>Area</span>
+                  <b>{formatArea(measureArea)}</b>
+                </div>
+              )}
+              <div className="measure-value">
+                <span>Points</span>
+                <b>{measurePoints.length}</b>
+              </div>
+            </div>
+            <div className="measure-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setMeasurePoints([])}
+                disabled={measurePoints.length === 0}
+              >
+                Clear
+              </button>
+              <button type="button" className="btn" onClick={toggleMeasure}>
+                Done
+              </button>
+            </div>
+          </section>
+        )}
+
+        {captureState !== 'idle' && (
+          <div className="map-toast" role="status">
+            {captureState === 'busy' && 'Rendering the PNG…'}
+            {captureState === 'saved' && 'PNG saved to your downloads'}
+            {captureState === 'error' && 'The PNG could not be created'}
+          </div>
         )}
 
         <nav className="bottom-toolbar" aria-label="Map tools">
@@ -577,6 +808,29 @@ export default function App() {
               <path d="M2 6.5h12M5.5 1.8v2.4M10.5 1.8v2.4" stroke="currentColor" strokeWidth="1.3" fill="none" />
             </svg>
             <span>CALENDAR</span>
+          </button>
+
+          <button
+            type="button"
+            className="tool-btn"
+            aria-pressed={measuring}
+            onClick={toggleMeasure}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M2.6 10.4L10.4 2.6L13.4 5.6L5.6 13.4L2.6 10.4Z"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                fill="none"
+              />
+              <path
+                d="M5.2 7.8L6.7 9.3M7.2 5.8L8.7 7.3M9.2 3.8L10.7 5.3"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                fill="none"
+              />
+            </svg>
+            <span>MEASURE</span>
           </button>
 
           <button
@@ -611,6 +865,24 @@ export default function App() {
               />
             </svg>
             <span>TIMELINE</span>
+          </button>
+
+          <button
+            type="button"
+            className="tool-btn"
+            aria-pressed={captureState === 'busy'}
+            onClick={handleCapture}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M2 5.6h2.6l1-1.7h4.8l1 1.7H14v7.1H2V5.6Z"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                fill="none"
+              />
+              <circle cx="8" cy="9" r="2.4" stroke="currentColor" strokeWidth="1.3" fill="none" />
+            </svg>
+            <span>CAPTURE</span>
           </button>
 
           <button

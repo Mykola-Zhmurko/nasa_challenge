@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import resource
 import shutil
-from typing import Any
+from typing import Any, Final
 import zlib
 
 import duckdb
@@ -223,68 +223,12 @@ def _prepare_history_files_sql(
     return usable_paths, len(usable_paths)
 
 
-def build_duckdb(
-    parquet_path: Path = PARQUET_PATH,
-    duckdb_path: Path = DUCKDB_PATH,
-    history_dir: Path | None = HISTORY_DIR,
-) -> tuple[BuildSummary, HarmonizeStats, int]:
-    """Build `data/fires.duckdb` tables from `data/fires.parquet` + `data/history/*.csv.gz`.
+HISTORY_STAGE_BATCH: Final[int] = 4
 
-    Creates tables:
-    - `fires(h3_r8, ts, sensor, satellite, lat, lon, confidence_pct, frp_mw, daynight, sources)`
-    - `calendar_monthly(h3_r8, year, month, detections, mean_frp)`
-    - `calendar_median(h3_r8, month, median_detections)`
-    - `calendar_global(month, detections, mean_frp)`
 
-    Args:
-        parquet_path: Input/output Parquet file path.
-        duckdb_path: Output DuckDB file path.
-        history_dir: Optional directory containing historical `.csv.gz` FIRMS files.
-
-    Returns:
-        Tuple of `(BuildSummary, history_harmonize_stats, history_files_count)`.
-    """
-    duckdb_path.parent.mkdir(parents=True, exist_ok=True)
-    pid = os.getpid()
-    tmp_db_path = duckdb_path.with_name(f"{duckdb_path.name}.{pid}.tmp")
-    tmp_wal_path = Path(f"{tmp_db_path}.wal")
-    tmp_spill_dir = duckdb_path.parent / f".{duckdb_path.name}.spill-{pid}.tmp"
-    for p in (tmp_db_path, tmp_wal_path):
-        if p.exists():
-            p.unlink()
-    if tmp_spill_dir.exists():
-        shutil.rmtree(tmp_spill_dir, ignore_errors=True)
-
-    hist_stats = HarmonizeStats()
-    hist_files_count = 0
-
-    con = duckdb.connect(str(tmp_db_path))
-    try:
-        con.execute("SET memory_limit='256MB'")
-        con.execute("SET threads=2")
-        con.execute("SET preserve_insertion_order=false")
-        con.execute(f"SET temp_directory='{str(tmp_spill_dir).replace(chr(39), chr(39)*2)}'")
-        try:
-            con.execute("LOAD h3")
-        except duckdb.Error:
-            con.execute("INSTALL h3 FROM community")
-            con.execute("LOAD h3")
-
-        # Provide convenience alias macro h3_to_parent -> h3_cell_to_parent per SPEC
-        con.execute(
-            "CREATE OR REPLACE MACRO h3_to_parent(cell, res) AS h3_cell_to_parent(cell, res)"
-        )
-
-        parquet_sql_path = str(parquet_path).replace("'", "''")
-        history_paths, hist_files_count = _prepare_history_files_sql(
-            con, history_dir, tmp_spill_dir
-        )
-
-        if history_paths:
-            # Stage history CSVs via streaming DuckDB read_csv_auto with union_by_name
-            con.execute(
-                f"""
-                CREATE TEMP TABLE _hist_staged AS
+def _history_stage_select_sql() -> str:
+    """Return the staging SELECT over one batch of history CSVs (single `?` parameter)."""
+    return f"""
                 SELECT
                     sensor,
                     ts_val AS ts,
@@ -347,9 +291,90 @@ def build_duckdb(
                         ignore_errors=true
                     )
                 )
-                """,
-                [history_paths],
-            )
+    """
+
+
+def _stage_history_batches(
+    con: duckdb.DuckDBPyConnection,
+    history_paths: list[str],
+    batch_size: int = HISTORY_STAGE_BATCH,
+) -> None:
+    """Stage history CSVs into `_hist_staged` in small batches.
+
+    Reading all year files in one `read_csv_auto` call allocates per-file reader
+    buffers at once and ran out of memory on a 2 GB VPS; four files per batch stay
+    well inside the limit and the result is identical.
+    """
+    select_sql = _history_stage_select_sql()
+    for start in range(0, len(history_paths), batch_size):
+        batch = history_paths[start : start + batch_size]
+        prefix = "CREATE TEMP TABLE _hist_staged AS" if start == 0 else "INSERT INTO _hist_staged"
+        con.execute(f"{prefix} {select_sql}", [batch])
+
+
+def build_duckdb(
+    parquet_path: Path = PARQUET_PATH,
+    duckdb_path: Path = DUCKDB_PATH,
+    history_dir: Path | None = HISTORY_DIR,
+) -> tuple[BuildSummary, HarmonizeStats, int]:
+    """Build `data/fires.duckdb` tables from `data/fires.parquet` + `data/history/*.csv.gz`.
+
+    Creates tables:
+    - `fires(h3_r8, ts, sensor, satellite, lat, lon, confidence_pct, frp_mw, daynight, sources)`
+    - `calendar_monthly(h3_r8, year, month, detections, mean_frp)`
+    - `calendar_median(h3_r8, month, median_detections)`
+    - `calendar_global(month, detections, mean_frp)`
+
+    Args:
+        parquet_path: Input/output Parquet file path.
+        duckdb_path: Output DuckDB file path.
+        history_dir: Optional directory containing historical `.csv.gz` FIRMS files.
+
+    Returns:
+        Tuple of `(BuildSummary, history_harmonize_stats, history_files_count)`.
+    """
+    duckdb_path.parent.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
+    tmp_db_path = duckdb_path.with_name(f"{duckdb_path.name}.{pid}.tmp")
+    tmp_wal_path = Path(f"{tmp_db_path}.wal")
+    tmp_spill_dir = duckdb_path.parent / f".{duckdb_path.name}.spill-{pid}.tmp"
+    for p in (tmp_db_path, tmp_wal_path):
+        if p.exists():
+            p.unlink()
+    if tmp_spill_dir.exists():
+        shutil.rmtree(tmp_spill_dir, ignore_errors=True)
+
+    hist_stats = HarmonizeStats()
+    hist_files_count = 0
+
+    con = duckdb.connect(str(tmp_db_path))
+    try:
+        # Staging the whole history (about 20M rows) does not fit in 256 MB; the
+        # limit stays overridable so a smaller VPS can lower it again.
+        memory_limit = os.environ.get("BUILD_MEMORY_LIMIT", "700MB")
+        con.execute(f"SET memory_limit='{memory_limit}'")
+        con.execute("SET threads=2")
+        con.execute("SET preserve_insertion_order=false")
+        con.execute(f"SET temp_directory='{str(tmp_spill_dir).replace(chr(39), chr(39)*2)}'")
+        try:
+            con.execute("LOAD h3")
+        except duckdb.Error:
+            con.execute("INSTALL h3 FROM community")
+            con.execute("LOAD h3")
+
+        # Provide convenience alias macro h3_to_parent -> h3_cell_to_parent per SPEC
+        con.execute(
+            "CREATE OR REPLACE MACRO h3_to_parent(cell, res) AS h3_cell_to_parent(cell, res)"
+        )
+
+        parquet_sql_path = str(parquet_path).replace("'", "''")
+        history_paths, hist_files_count = _prepare_history_files_sql(
+            con, history_dir, tmp_spill_dir
+        )
+
+        if history_paths:
+            # Stage history CSVs via streaming DuckDB read_csv_auto with union_by_name
+            _stage_history_batches(con, history_paths)
 
             h_counts = con.execute(
                 """

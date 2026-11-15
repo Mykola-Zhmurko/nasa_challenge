@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {MAX_ZOOM, MIN_ZOOM, resForZoom} from '../../lib/zoom'
+import {MAX_ZOOM, MIN_ZOOM, resForZoom, wheelZoomDelta} from '../../lib/zoom'
 
 describe('resForZoom', () => {
   it('returns the documented H3 hexagon resolution for representative zoom levels', () => {
@@ -29,3 +29,14 @@ describe('resForZoom', () => {
     expect(resForZoom(MAX_ZOOM)).toBeLessThanOrEqual(7)
   })
 })
+
+describe('wheelZoomDelta', () => {
+  it('converts pixel, line, and page wheel deltas into zoom level deltas', () => {
+    expect(wheelZoomDelta(100, 0)).toBe(-1)
+    expect(wheelZoomDelta(-100, 0)).toBe(1)
+    expect(wheelZoomDelta(3, 1)).toBeCloseTo(-0.99)
+    expect(wheelZoomDelta(1, 2)).toBe(-4)
+    expect(wheelZoomDelta(50, 0)).toBe(-0.5)
+  })
+})
+
