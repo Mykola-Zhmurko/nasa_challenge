@@ -61,8 +61,7 @@ The database file is not in this repository (210 MB) — the pipeline rebuilds i
 
 ## Presentation
 
-Submission material lives in [`presentation/`](presentation/README.md): the 7-slide deck (PPTX and PDF)
-and the 27-second demo video.
+The 7-slide deck is in [`presentation/fire-calendar-demo.pptx`](presentation/fire-calendar-demo.pptx).
 
 ## Documentation
 
