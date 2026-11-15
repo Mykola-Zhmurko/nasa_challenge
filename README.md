@@ -5,49 +5,48 @@ Team "The One" · Dnipro · 14–15 November 2026
 
 ## What it is
 
-Two satellites watch fires on Earth: **MODIS** (1 km, since 2001) and **VIIRS** (375 m, since 2012).
-They measure differently, so their data cannot be compared directly. This app turns both into
-**one series**, so the user never has to think about which satellite saw a fire.
+Two satellites look for fires on Earth: **MODIS** (1 km, since 2001) and **VIIRS** (375 m, since 2012).
+They see differently and rate confidence differently, so their numbers cannot be compared directly.
+This app converts both into **one format**. The user only sees fires — never "which satellite saw this one".
 
-Pick an area and a period. The app shows where fires were, when they happened, and whether the
-current month is above or below the normal level.
+Pick an area and a period. You get where fires were, when they happened, and whether the month was
+normal or not.
 
-![Fire Calendar — world view with harmonized hotspots, totals and the time panel](docs/screenshots/full.png)
+![Fire Calendar — world view with hotspots, totals and the time panel](docs/screenshots/full.png)
 
 ## What you can do
 
-- Pick an area: draw a rectangle on the map, type coordinates, or search for a city
-- See hotspots on the map, coloured by fire power (MW)
-- Read the burning calendar: year by month, then day by day, with the peak day
-- Compare the selected month with the median of the same days in earlier years
-- Download exactly what you see as a CSV file
-
-## Only the data that is needed
-
-- **H3 cells, not single points.** Every detection gets an H3 cell (level 8, ~0.74 km²) when it is
-  imported, and the map asks for cells instead of detections: one shape per cell, carrying the number of
-  detections and the mean fire power, at a resolution that follows the zoom. A worldwide week is about
-  17,700 shapes instead of 291,000 points, and the number stays bounded however far the map is zoomed out.
-- **Polygons for areas.** The area you draw is a polygon: the server keeps only what lies inside it — an
-  exact box for the map, an H3 polygon fill for cell and calendar queries — so a query touches the cells
-  of that area, never the whole table.
-- **Detections on request only.** Individual rows are never drawn on the map; the CSV export is the one
-  place that returns them.
+- Choose an area: draw a rectangle on the map, type coordinates, or search for a city
+- See the hotspots on the map, coloured by fire power (MW)
+- Open the burning calendar: year by month, then day by day, with the peak day
+- See how the selected month compares with the median of earlier years
+- Download what you see as a CSV file
 
 ## How two sensors become one series
 
-| Step | Rule |
-| --- | --- |
-| Confidence | VIIRS "low" is dropped; "nominal" becomes 50, "high" becomes 90. MODIS below 50 is dropped |
-| Duplicates | Same ~1 km cell on the same day → one record, the stronger detection wins |
-| Provenance | Every record keeps a note whether MODIS, VIIRS or both saw it |
+1. **Clean.** VIIRS "low" confidence is dropped ("nominal" counts as 50, "high" as 90). MODIS below 50 is dropped.
+2. **Merge.** Both sensors are now in the same columns, so the app can treat them as one dataset.
+3. **Remove doubles.** If both satellites saw a fire in the same small cell on the same day, it counts once —
+   and the record remembers whether MODIS, VIIRS or both saw it.
+
+## Why hexagons (H3, made by Uber)
+
+To count fires in an area, you need cells of the same size everywhere. We use **H3** — an open-source
+grid of hexagons created by **Uber** and published under the Apache 2.0 licence.
+
+- A hexagon has six neighbours at the same distance. A square grid does not: its corners are farther away,
+  so a fire that spreads in one direction looks different from one that spreads diagonally.
+- H3 wraps the whole globe, so cells have the same size and shape at every latitude — counts stay comparable
+  between Germany and Africa.
+- Every detection is put into a cell of about 1 km² (H3 level 8). The map then draws **one shape per cell**
+  instead of thousands of single points, which keeps it fast even worldwide.
 
 ## Data
 
 Fire data: **NASA FIRMS** — MODIS C6.1 and VIIRS C2 (NOAA-20), <https://firms.modaps.eosdis.nasa.gov>.
-The public download covers the last 7 days; older years need a free FIRMS API key (`FIRMS_MAP_KEY`).
-The database holds **8.7 million detections from 2001 to November 2026**; the historical years cover
-Europe, the current window is worldwide. Days without data are marked as such.
+The last 7 days are free to download; older years need a free FIRMS API key (`FIRMS_MAP_KEY`).
+The database holds **8.7 million detections from 2001 to November 2026**. The historical years cover
+Europe, the current window is worldwide. Days without data are shown as such.
 
 ## Run it
 
@@ -67,5 +66,6 @@ development, UI copy rules.
 
 ## Credits
 
-Fire data: NASA FIRMS / LANCE. Imagery: Esri, OpenStreetMap contributors. City search: Open-Meteo
-(GeoNames). Built with DuckDB, FastAPI, React and Leaflet.
+Fire data: NASA FIRMS / LANCE. Hexagon grid: [H3](https://h3geo.org) by Uber (Apache 2.0).
+Map imagery: Esri, OpenStreetMap contributors. City search: Open-Meteo (GeoNames).
+Built with DuckDB, FastAPI, React and Leaflet.
