@@ -59,6 +59,11 @@ cd web && npm install && npm run dev                            # http://127.0.0
 
 The database file is not in this repository (210 MB) — the pipeline rebuilds it.
 
+## Presentation
+
+Submission material lives in [`presentation/`](presentation/README.md): the 7-slide deck (PPTX and PDF)
+and the 27-second demo video.
+
 ## Documentation
 
 Developer documentation lives in [`docs/`](docs/README.md): architecture, data model, API, frontend,
